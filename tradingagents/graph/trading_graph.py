@@ -7,6 +7,7 @@ import json
 from datetime import datetime, timedelta
 from typing import Dict, Any, Tuple, List, Optional
 
+import pandas as pd
 import yfinance as yf
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,62 @@ from .setup import GraphSetup
 from .propagation import Propagator
 from .reflection import Reflector
 from .signal_processing import SignalProcessor
+
+
+def _history(ticker: str, start_str: str, end_str: str) -> "pd.DataFrame":
+    """Fetch OHLCV history for *ticker*, trying yfinance then akshare.
+
+    Module-level function (not a class method) so it works correctly even
+    when called through mock objects in tests.
+    """
+    try:
+        hist = yf.Ticker(ticker).history(start=start_str, end=end_str)
+        if hist is not None and not hist.empty and "Close" in hist.columns:
+            return hist
+    except Exception:
+        pass
+
+    # Fall back to akshare
+    try:
+        import akshare as ak  # noqa: F811 (lazy import, seldom hit)
+
+        upper = ticker.upper()
+        if upper.endswith(".HK"):
+            code = upper[:-3].lstrip("0").zfill(5)
+            df = ak.stock_hk_daily(symbol=code, adjust="qfq")
+        elif upper.endswith(".SS") or upper.endswith(".SZ"):
+            code = ("SH" + upper[:-3]) if upper.endswith(".SS") else ("SZ" + upper[:-3])
+            lc = code.replace("SH", "sh").replace("SZ", "sz")
+            df = None
+            # Sina first, Tencent fallback
+            try:
+                df = ak.stock_zh_a_daily(symbol=lc, adjust="qfq")
+            except Exception:
+                try:
+                    df = ak.stock_zh_a_hist_tx(symbol=lc, adjust="qfq")
+                    if df is not None and not df.empty and "amount" in df.columns and "volume" not in df.columns:
+                        df = df.rename(columns={"amount": "volume"})
+                except Exception:
+                    pass
+        else:
+            # US ticker or bare symbol
+            df = ak.stock_us_daily(symbol=upper, adjust="qfq")
+
+        if df is not None and not df.empty:
+            df["date"] = pd.to_datetime(df["date"], errors="coerce")
+            df = df[
+                (df["date"] >= pd.to_datetime(start_str))
+                & (df["date"] <= pd.to_datetime(end_str))
+            ]
+            if not df.empty:
+                df = df.rename(columns={"date": "Date", "open": "Open", "high": "High",
+                                         "low": "Low", "close": "Close", "volume": "Volume"})
+                df = df.set_index("Date")
+                return df
+    except Exception:
+        pass
+
+    return pd.DataFrame()
 
 
 class TradingAgentsGraph:
@@ -237,8 +294,8 @@ class TradingAgentsGraph:
             end = start + timedelta(days=holding_days + 7)  # buffer for weekends/holidays
             end_str = end.strftime("%Y-%m-%d")
 
-            stock = yf.Ticker(ticker).history(start=trade_date, end=end_str)
-            bench = yf.Ticker(benchmark).history(start=trade_date, end=end_str)
+            stock = _history(ticker, trade_date, end_str)
+            bench = _history(benchmark, trade_date, end_str)
 
             if len(stock) < 2 or len(bench) < 2:
                 return None, None, None

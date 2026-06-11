@@ -35,14 +35,14 @@ class TestLoadOhlcvNoPoison(unittest.TestCase):
         empty = pd.DataFrame()
         with mock.patch.object(stockstats_utils.yf, "download", return_value=empty) as dl:
             with self.assertRaises(NoMarketDataError):
-                stockstats_utils.load_ohlcv("FAKE", "2026-01-01")
+                stockstats_utils.load_ohlcv_yfinance("FAKE", "2026-01-01")
         # Nothing should have been written to the cache.
         self.assertEqual(os.listdir(self._tmp), [])
 
         # A second call must re-attempt the fetch (no poisoned cache served).
         with mock.patch.object(stockstats_utils.yf, "download", return_value=empty) as dl2:
             with self.assertRaises(NoMarketDataError):
-                stockstats_utils.load_ohlcv("FAKE", "2026-01-01")
+                stockstats_utils.load_ohlcv_yfinance("FAKE", "2026-01-01")
             self.assertTrue(dl2.called)
 
 
@@ -52,7 +52,7 @@ class TestRouteToVendorSentinel(unittest.TestCase):
         def raises_no_data(symbol, *a, **k):
             raise NoMarketDataError(symbol, "GC=F", "no rows")
 
-        patched = {"yfinance": raises_no_data, "alpha_vantage": raises_no_data}
+        patched = {"akshare": raises_no_data, "yfinance": raises_no_data, "alpha_vantage": raises_no_data}
         with mock.patch.dict(
             interface.VENDOR_METHODS, {"get_stock_data": patched}, clear=False
         ):
@@ -74,7 +74,7 @@ class TestRouteToVendorSentinel(unittest.TestCase):
         def raises_unavailable(symbol, *a, **k):
             raise ValueError("ALPHA_VANTAGE_API_KEY environment variable is not set.")
 
-        patched = {"yfinance": raises_no_data, "alpha_vantage": raises_unavailable}
+        patched = {"akshare": raises_no_data, "yfinance": raises_no_data, "alpha_vantage": raises_unavailable}
         with mock.patch.dict(
             interface.VENDOR_METHODS, {"get_stock_data": patched}, clear=False
         ):

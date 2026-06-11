@@ -66,20 +66,22 @@ def resolve_instrument_identity(ticker: str) -> dict:
     the price action to a narrative and invent an identity that then cascaded
     through every downstream agent.
 
-    Best-effort by design: if yfinance is unavailable, rate-limited, or doesn't
-    recognise the ticker, we return ``{}`` and the caller falls back to
-    ticker-only context rather than failing before analysis starts. Cached so
-    the lookup happens at most once per ticker per process.
+    Tries yfinance first (best global coverage), then falls back to akshare
+    for Chinese and HK markets. Best-effort by design: if all sources fail,
+    returns ``{}`` and the caller falls back to ticker-only context rather
+    than failing before analysis starts. Cached so the lookup happens at most
+    once per ticker per process.
     """
+    info: dict[str, str] = {}
     try:
-        info = yf.Ticker(ticker.upper()).info or {}
+        yf_info = yf.Ticker(ticker.upper()).info or {}
     except Exception as exc:  # noqa: BLE001 — fail open, never block the run
-        logger.debug("Could not resolve instrument identity for %s: %s", ticker, exc)
-        return {}
+        logger.debug("yfinance identity unavailable for %s: %s", ticker, exc)
+        yf_info = {}
 
     identity: dict[str, str] = {}
-    company_name = _clean_identity_value(info.get("longName")) or _clean_identity_value(
-        info.get("shortName")
+    company_name = _clean_identity_value(yf_info.get("longName")) or _clean_identity_value(
+        yf_info.get("shortName")
     )
     if company_name:
         identity["company_name"] = company_name
@@ -89,9 +91,79 @@ def resolve_instrument_identity(ticker: str) -> dict:
         ("exchange", "exchange"),
         ("quoteType", "quote_type"),
     ):
-        value = _clean_identity_value(info.get(source_key))
+        value = _clean_identity_value(yf_info.get(source_key))
         if value:
             identity[target_key] = value
+
+    # If yfinance returned usable identity, return it immediately.
+    if identity:
+        return identity
+
+    # --- akshare fallback for CN and HK tickers ---
+    upper = ticker.upper()
+    try:
+        import akshare as ak
+
+        if upper.endswith(".SS"):
+            bare_code = upper[:-3]
+            identity["exchange"] = "Shanghai Stock Exchange"
+            identity["quote_type"] = "EQUITY"
+            # Use stock_info_a_code_name for reliable name lookup
+            try:
+                name_df = ak.stock_info_a_code_name()
+                row = name_df[name_df["code"] == bare_code]
+                if not row.empty:
+                    cn_name = _clean_identity_value(row.iloc[0].get("name"))
+                    if cn_name:
+                        identity["company_name"] = cn_name
+            except Exception:
+                pass
+            # Best-effort industry from profile
+            try:
+                df = ak.stock_profile_cninfo(symbol="SH" + bare_code)
+                if df is not None and not df.empty:
+                    industry = _clean_identity_value(df.iloc[0].get("所属行业"))
+                    if industry:
+                        identity["industry"] = industry
+            except Exception:
+                pass
+        elif upper.endswith(".SZ"):
+            bare_code = upper[:-3]
+            identity["exchange"] = "Shenzhen Stock Exchange"
+            identity["quote_type"] = "EQUITY"
+            try:
+                name_df = ak.stock_info_a_code_name()
+                row = name_df[name_df["code"] == bare_code]
+                if not row.empty:
+                    cn_name = _clean_identity_value(row.iloc[0].get("name"))
+                    if cn_name:
+                        identity["company_name"] = cn_name
+            except Exception:
+                pass
+            try:
+                df = ak.stock_profile_cninfo(symbol="SZ" + bare_code)
+                if df is not None and not df.empty:
+                    industry = _clean_identity_value(df.iloc[0].get("所属行业"))
+                    if industry:
+                        identity["industry"] = industry
+            except Exception:
+                pass
+        elif upper.endswith(".HK"):
+            code = upper[:-3].lstrip("0").zfill(5)
+            df = ak.stock_hk_company_profile_em(symbol=code)
+            if df is not None and not df.empty:
+                row = df.iloc[0]
+                cn_name = _clean_identity_value(row.get("公司名称"))
+                if cn_name:
+                    identity["company_name"] = cn_name
+                industry = _clean_identity_value(row.get("所属行业"))
+                if industry:
+                    identity["industry"] = industry
+                identity["exchange"] = "Hong Kong Stock Exchange"
+                identity["quote_type"] = "EQUITY"
+    except Exception as exc:
+        logger.debug("akshare identity fallback failed for %s: %s", ticker, exc)
+
     return identity
 
 

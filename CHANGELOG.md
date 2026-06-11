@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
 
+> **Note:** This is a fork of [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents)
+> maintained at [niezmz/tradingagents-akshare](https://github.com/niezmz/tradingagents-akshare).
+> The primary change is using **akshare** as the default data vendor for enhanced China A-share market support.
+
+## [fork] — 2026-06-11
+
+### Changed
+
+- **akshare** is now the default data vendor, replacing yfinance as the primary source
+- Multi-source architecture: Sina Finance (OHLCV), East Money (financial statements),
+  Caixin/CCTV (macro news), with automatic yfinance fallback
+
 ## [0.2.5] — 2026-05-11
 
 ### Added

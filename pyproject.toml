@@ -5,8 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "tradingagents"
 version = "0.2.5"
-description = "TradingAgents: Multi-Agents LLM Financial Trading Framework"
+description = "TradingAgents: Multi-Agents LLM Financial Trading Framework (akshare-enhanced fork)"
 readme = "README.md"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "niezmz"},
+]
+urls = {Repository = "https://github.com/niezmz/tradingagents-akshare"}
 requires-python = ">=3.10"
 dependencies = [
     "langchain-core>=0.3.81",
@@ -30,6 +35,7 @@ dependencies = [
     "tqdm>=4.67.1",
     "typing-extensions>=4.14.0",
     "yfinance>=1.4.1",
+    "akshare>=1.18.0",
 ]
 
 [project.scripts]

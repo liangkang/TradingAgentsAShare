@@ -24,6 +24,17 @@ from .alpha_vantage import (
 )
 from .alpha_vantage_common import AlphaVantageRateLimitError
 from .symbol_utils import NoMarketDataError
+from .akshare_vendor import (
+    get_stock_data_akshare,
+    get_stock_stats_indicators_akshare,
+    get_fundamentals_akshare as get_akshare_fundamentals,
+    get_balance_sheet_akshare as get_akshare_balance_sheet,
+    get_cashflow_akshare as get_akshare_cashflow,
+    get_income_statement_akshare as get_akshare_income_statement,
+    get_insider_transactions_akshare as get_akshare_insider_transactions,
+    get_news_akshare as get_akshare_news,
+    get_global_news_akshare as get_akshare_global_news,
+)
 
 # Configuration and routing logic
 from .config import get_config
@@ -62,6 +73,7 @@ TOOLS_CATEGORIES = {
 }
 
 VENDOR_LIST = [
+    "akshare",
     "yfinance",
     "alpha_vantage",
 ]
@@ -70,41 +82,50 @@ VENDOR_LIST = [
 VENDOR_METHODS = {
     # core_stock_apis
     "get_stock_data": {
+        "akshare": get_stock_data_akshare,
         "alpha_vantage": get_alpha_vantage_stock,
         "yfinance": get_YFin_data_online,
     },
     # technical_indicators
     "get_indicators": {
+        "akshare": get_stock_stats_indicators_akshare,
         "alpha_vantage": get_alpha_vantage_indicator,
         "yfinance": get_stock_stats_indicators_window,
     },
     # fundamental_data
     "get_fundamentals": {
+        "akshare": get_akshare_fundamentals,
         "alpha_vantage": get_alpha_vantage_fundamentals,
         "yfinance": get_yfinance_fundamentals,
     },
     "get_balance_sheet": {
+        "akshare": get_akshare_balance_sheet,
         "alpha_vantage": get_alpha_vantage_balance_sheet,
         "yfinance": get_yfinance_balance_sheet,
     },
     "get_cashflow": {
+        "akshare": get_akshare_cashflow,
         "alpha_vantage": get_alpha_vantage_cashflow,
         "yfinance": get_yfinance_cashflow,
     },
     "get_income_statement": {
+        "akshare": get_akshare_income_statement,
         "alpha_vantage": get_alpha_vantage_income_statement,
         "yfinance": get_yfinance_income_statement,
     },
     # news_data
     "get_news": {
+        "akshare": get_akshare_news,
         "alpha_vantage": get_alpha_vantage_news,
         "yfinance": get_news_yfinance,
     },
     "get_global_news": {
+        "akshare": get_akshare_global_news,
         "yfinance": get_global_news_yfinance,
         "alpha_vantage": get_alpha_vantage_global_news,
     },
     "get_insider_transactions": {
+        "akshare": get_akshare_insider_transactions,
         "alpha_vantage": get_alpha_vantage_insider_transactions,
         "yfinance": get_yfinance_insider_transactions,
     },
@@ -183,8 +204,9 @@ def route_to_vendor(method: str, *args, **kwargs):
         resolved = "" if canonical == sym else f" (resolved to '{canonical}')"
         return (
             f"NO_DATA_AVAILABLE: No market data found for '{sym}'{resolved} from "
-            f"any configured vendor. The symbol may be invalid, delisted, or not "
-            f"covered by Yahoo Finance / Alpha Vantage. Do not estimate or "
+            f"any configured vendor (akshare, yfinance, Alpha Vantage). "
+            f"The symbol may be invalid, delisted, or not "
+            f"covered by any vendor. Do not estimate or "
             f"fabricate values — report that data is unavailable for this symbol."
         )
 

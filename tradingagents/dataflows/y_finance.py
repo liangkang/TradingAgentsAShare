@@ -4,7 +4,7 @@ from dateutil.relativedelta import relativedelta
 import pandas as pd
 import yfinance as yf
 import os
-from .stockstats_utils import StockstatsUtils, _clean_dataframe, yf_retry, load_ohlcv, filter_financials_by_date
+from .stockstats_utils import StockstatsUtils, _clean_dataframe, yf_retry, load_ohlcv_yfinance, filter_financials_by_date
 from .symbol_utils import normalize_symbol, NoMarketDataError
 
 def get_YFin_data_online(
@@ -205,7 +205,7 @@ def _get_stock_stats_bulk(
     """
     from stockstats import wrap
 
-    data = load_ohlcv(symbol, curr_date)
+    data = load_ohlcv_yfinance(symbol, curr_date)
     df = wrap(data)
     df["Date"] = df["Date"].dt.strftime("%Y-%m-%d")
     

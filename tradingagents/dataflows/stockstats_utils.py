@@ -62,8 +62,8 @@ def _clean_dataframe(data: pd.DataFrame) -> pd.DataFrame:
     return data
 
 
-def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
-    """Fetch OHLCV data with caching, filtered to prevent look-ahead bias.
+def load_ohlcv_yfinance(symbol: str, curr_date: str) -> pd.DataFrame:
+    """Fetch OHLCV data from Yahoo Finance with caching, filtered to prevent look-ahead bias.
 
     Downloads 15 years of data up to today and caches per symbol. On
     subsequent calls the cache is reused. Rows after curr_date are
@@ -125,6 +125,26 @@ def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
     return data
 
 
+def load_ohlcv(symbol: str, curr_date: str, vendor: str = None) -> pd.DataFrame:
+    """Fetch OHLCV data via the configured primary vendor.
+
+    Dispatches to the vendor-specific loader based on the
+    ``core_stock_apis`` config value.  Internal yfinance-vendor callers
+    should call ``load_ohlcv_yfinance`` directly so the yfinance vendor
+    is self-contained.
+    """
+    if vendor is None:
+        vendor_config = get_config().get("data_vendors", {}).get(
+            "core_stock_apis", "yfinance"
+        )
+        vendor = vendor_config.split(",")[0].strip()
+    if vendor == "akshare":
+        from tradingagents.dataflows.akshare_vendor import _load_ohlcv_akshare
+
+        return _load_ohlcv_akshare(symbol, curr_date)
+    return load_ohlcv_yfinance(symbol, curr_date)
+
+
 def filter_financials_by_date(data: pd.DataFrame, curr_date: str) -> pd.DataFrame:
     """Drop financial statement columns (fiscal period timestamps) after curr_date.
 
@@ -150,7 +170,7 @@ class StockstatsUtils:
             str, "curr date for retrieving stock price data, YYYY-mm-dd"
         ],
     ):
-        data = load_ohlcv(symbol, curr_date)
+        data = load_ohlcv_yfinance(symbol, curr_date)
         df = wrap(data)
         df["Date"] = df["Date"].dt.strftime("%Y-%m-%d")
         curr_date_str = pd.to_datetime(curr_date).strftime("%Y-%m-%d")
