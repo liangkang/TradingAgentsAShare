@@ -66,9 +66,36 @@ def create_sentiment_analyst(llm):
         # Pre-fetch all three sources. Each fetcher degrades gracefully and
         # returns a string (no exceptions surface from here), so the LLM
         # always sees something — either real data or a clear placeholder.
+        #
+        # StockTwits and Reddit are US-centric platforms. For non-US tickers
+        # (A-shares, HK, crypto, etc.) they carry negligible signal and the
+        # network calls often time out from behind certain firewalls. Skip
+        # them entirely and supply honest <unavailable> placeholders so the
+        # LLM can flag lower confidence rather than waiting for dead requests.
+        ticker_upper = ticker.upper()
+        is_us_ticker = not (
+            ticker_upper.endswith(".SS")
+            or ticker_upper.endswith(".SZ")
+            or ticker_upper.endswith(".HK")
+            or ticker_upper.endswith(".T")
+            or ticker_upper.endswith(".L")
+        )
+
         news_block = get_news.func(ticker, start_date, end_date)
-        stocktwits_block = fetch_stocktwits_messages(ticker, limit=30)
-        reddit_block = fetch_reddit_posts(ticker)
+
+        if is_us_ticker:
+            stocktwits_block = fetch_stocktwits_messages(ticker, limit=30)
+            reddit_block = fetch_reddit_posts(ticker)
+        else:
+            stocktwits_block = (
+                f"<unavailable — StockTwits is a US-centric retail-trader platform "
+                f"and carries negligible signal for non-US tickers like {ticker}>"
+            )
+            reddit_block = (
+                f"<unavailable — Reddit finance communities (r/wallstreetbets, "
+                f"r/stocks, r/investing) are US-centric and carry negligible "
+                f"signal for non-US tickers like {ticker}>"
+            )
 
         system_message = _build_system_message(
             ticker=ticker,

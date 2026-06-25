@@ -98,3 +98,51 @@ tradingagents
 ```
 
 如需切回 yfinance 或使用 Alpha Vantage，修改配置中的 `data_vendors` 即可。详见 `default_config.py` 和原始 [README.md](README.md) 的 Data Architecture 章节。
+
+---
+
+## Web 前端界面
+
+除了命令行模式，项目还提供了 **Web 前端界面**，可在浏览器中完成分析配置、实时监控分析进度、查看历史报告。
+
+### 启动
+
+```bash
+pip install -e .
+tradingagents web                    # 默认 http://127.0.0.1:8000
+tradingagents web --port 3000        # 自定义端口
+```
+
+浏览器打开 `http://127.0.0.1:8000` 即可使用。
+
+### 功能
+
+| 功能 | 说明 |
+|---|---|
+| **配置表单** | 8 步骤配置（股票代码、日期、语言、分析师、研究深度、LLM 提供商、模型选择） |
+| **实时仪表盘** | 12 个 Agent 状态面板 + 12 个独立 Tab 实时展示各阶段报告 |
+| **阶段提示** | 蓝色提示条标识当前分析阶段（分析师 → 研究辩论 → 交易员 → 风险管理 → 最终决策） |
+| **消息日志** | 底部可折叠面板，实时展示 LLM 调用和工具调用记录 |
+| **历史记录** | 分析完成后自动保存，支持随时查看和删除历史报告 |
+
+### 架构
+
+```
+Web 前端（HTML/CSS/JS，单文件）
+        │  SSE (Server-Sent Events)
+FastAPI 后端（web/app.py）
+        │  调用 graph.stream()
+TradingAgentsGraph 核心引擎（零修改）
+```
+
+Web 模式与 CLI 模式共享同一核心引擎（`TradingAgentsGraph`），API Key 同样从 `.env` 文件读取。
+
+### 扩展工具
+
+Web 模式新增了 3 个 A 股专属分析工具（基于 akshare）：
+
+| 工具 | 分配 Analyst | 说明 |
+|---|---|---|
+| `get_fund_flow` | Market Analyst | 同花顺资金流向：实时流入/流出/净额 |
+| `get_lhb_detail` | News Analyst | 东方财富龙虎榜：席位买卖明细、上榜原因 |
+| `get_institute_hold` | Fundamentals Analyst | 新浪财经机构持仓：机构数量、持股比例变化 |

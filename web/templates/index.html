@@ -1,0 +1,949 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TradingAgents — Web 交易分析平台</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+/* ============================================================
+   TradingAgents Web — Dark Terminal Theme with Tabs
+   ============================================================ */
+:root {
+  --bg: #0d1117; --bg-panel: #161b22; --bg-input: #21262d;
+  --border: #30363d; --text: #c9d1d9; --text-dim: #8b949e;
+  --text-bright: #f0f6fc; --green: #3fb950; --blue: #58a6ff;
+  --yellow: #d29922; --red: #f85149; --purple: #bc8cff;
+  --cyan: #39d2c0; --orange: #db6d28; --radius: 8px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
+  background: var(--bg); color: var(--text); line-height: 1.5; min-height: 100vh;
+}
+header {
+  background: var(--bg-panel); border-bottom: 1px solid var(--border);
+  padding: 10px 24px; display: flex; align-items: center; justify-content: space-between;
+  position: sticky; top: 0; z-index: 100;
+}
+header h1 { font-size: 1.15rem; font-weight: 700; color: var(--green); }
+header .subtitle { font-size: 0.75rem; color: var(--text-dim); }
+.container { max-width: 1500px; margin: 0 auto; padding: 16px; }
+
+/* ---- Panels ---- */
+.panel {
+  background: var(--bg-panel); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px; margin-bottom: 12px;
+}
+.panel-title {
+  font-size: 0.8rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--text-dim);
+  margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border);
+}
+
+/* ---- Forms ---- */
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.form-grid.single { grid-template-columns: 1fr; }
+.form-group { display: flex; flex-direction: column; gap: 3px; }
+.form-group label { font-size: 0.78rem; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.03em; }
+.form-group .hint { font-size: 0.7rem; color: var(--text-dim); font-style: italic; }
+input, select, textarea {
+  background: var(--bg-input); border: 1px solid var(--border); color: var(--text);
+  padding: 7px 10px; border-radius: 6px; font-size: 0.88rem; font-family: inherit;
+  transition: border-color 0.15s;
+}
+input:focus, select:focus, textarea:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rgba(88,166,255,0.15); }
+select { cursor: pointer; }
+.checkbox-group { display: flex; flex-wrap: wrap; gap: 6px; }
+.checkbox-item {
+  display: flex; align-items: center; gap: 5px;
+  background: var(--bg-input); border: 1px solid var(--border);
+  border-radius: 6px; padding: 5px 10px; cursor: pointer;
+  font-size: 0.83rem; transition: border-color 0.15s;
+}
+.checkbox-item:hover { border-color: var(--blue); }
+.checkbox-item.selected { border-color: var(--green); background: rgba(63,185,80,0.1); }
+.checkbox-item input[type="checkbox"] { accent-color: var(--green); }
+
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 9px 20px; border: none; border-radius: 6px;
+  font-size: 0.88rem; font-weight: 600; cursor: pointer;
+  transition: opacity 0.15s, transform 0.1s;
+}
+.btn:hover { opacity: 0.9; } .btn:active { transform: scale(0.98); }
+.btn-primary { background: var(--green); color: #000; }
+.btn-secondary { background: var(--bg-input); color: var(--text); border: 1px solid var(--border); }
+.btn-sm { padding: 5px 12px; font-size: 0.78rem; }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ---- Stats Bar ---- */
+.stats-bar {
+  display: flex; gap: 12px; flex-wrap: wrap;
+  padding: 10px 14px; background: var(--bg-panel);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  margin-bottom: 12px;
+}
+.stat-item { display: flex; flex-direction: column; align-items: center; padding: 2px 10px; border-right: 1px solid var(--border); }
+.stat-item:last-child { border-right: none; }
+.stat-value { font-size: 1.05rem; font-weight: 700; }
+.stat-label { font-size: 0.68rem; color: var(--text-dim); text-transform: uppercase; }
+
+/* ---- Dashboard ---- */
+.dashboard { display: none; }
+.dashboard.active { display: block; }
+
+.dashboard-main {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: 12px;
+  height: calc(100vh - 310px);
+  min-height: 500px;
+}
+
+/* ---- Agent Panel ---- */
+.agents-panel { overflow-y: auto; }
+.agent-table { width: 100%; font-size: 0.78rem; border-collapse: collapse; }
+.agent-table th { text-align: left; padding: 5px 6px; color: var(--text-dim); font-size: 0.68rem; text-transform: uppercase; border-bottom: 1px solid var(--border); }
+.agent-table td { padding: 4px 6px; border-bottom: 1px solid rgba(48,54,61,0.4); }
+.agent-table .team-row td { color: var(--text-dim); font-size: 0.68rem; padding-top: 8px; font-weight: 600; }
+.status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; }
+.status-pending { color: var(--text-dim); }
+.status-in_progress { color: var(--blue); }
+.status-in_progress .status-dot { background: var(--blue); animation: pulse 1.5s ease-in-out infinite; }
+.status-completed { color: var(--green); }
+.status-completed .status-dot { background: var(--green); }
+.status-error { color: var(--red); }
+.status-error .status-dot { background: var(--red); }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+/* ---- Tabs ---- */
+.tab-container { display: flex; flex-direction: column; height: 100%; }
+.tab-nav {
+  display: flex; gap: 2px; border-bottom: 1px solid var(--border);
+  overflow-x: auto; flex-shrink: 0;
+}
+.tab-btn {
+  padding: 7px 14px; font-size: 0.78rem; font-weight: 600;
+  background: transparent; border: none; color: var(--text-dim);
+  cursor: pointer; white-space: nowrap; border-bottom: 2px solid transparent;
+  transition: all 0.15s; position: relative;
+}
+.tab-btn:hover { color: var(--text); }
+.tab-btn.active { color: var(--green); border-bottom-color: var(--green); }
+.tab-btn .badge {
+  display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  margin-left: 5px; vertical-align: middle;
+}
+.tab-btn .badge.pending { background: var(--text-dim); }
+.tab-btn .badge.in_progress { background: var(--blue); animation: pulse 1.5s ease-in-out infinite; }
+.tab-btn .badge.completed { background: var(--green); }
+
+.tab-content { flex: 1; overflow-y: auto; padding: 12px 0; }
+.tab-pane { display: none; }
+.tab-pane.active { display: block; }
+.tab-placeholder { color: var(--text-dim); font-style: italic; padding: 20px; text-align: center; }
+
+/* ---- Report Content ---- */
+.report-content { font-size: 0.83rem; line-height: 1.6; }
+.report-content h1, .report-content h2, .report-content h3 { color: var(--text-bright); margin-top: 14px; }
+.report-content h1 { font-size: 1.2rem; } .report-content h2 { font-size: 1.05rem; } .report-content h3 { font-size: 0.95rem; }
+.report-content p { margin: 7px 0; }
+.report-content ul, .report-content ol { padding-left: 18px; margin: 7px 0; }
+.report-content code { background: var(--bg-input); padding: 2px 5px; border-radius: 4px; font-size: 0.78rem; }
+.report-content pre { background: var(--bg-input); padding: 10px; border-radius: 6px; overflow-x: auto; }
+.report-content table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 0.8rem; }
+.report-content th, .report-content td { border: 1px solid var(--border); padding: 5px 8px; text-align: left; }
+.report-content blockquote { border-left: 3px solid var(--blue); padding-left: 10px; color: var(--text-dim); margin: 10px 0; }
+
+/* ---- Messages Panel (bottom) ---- */
+.messages-panel { max-height: 160px; overflow-y: auto; }
+.messages-panel.collapsed .msg-list { display: none; }
+.messages-panel .panel-title { cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+.msg-row { padding: 2px 8px; font-size: 0.75rem; border-bottom: 1px solid rgba(48,54,61,0.3); display: flex; gap: 6px; }
+.msg-time { color: var(--text-dim); white-space: nowrap; min-width: 50px; font-size: 0.7rem; }
+.msg-type { font-weight: 600; white-space: nowrap; min-width: 44px; font-size: 0.72rem; }
+.msg-type.Agent { color: var(--cyan); } .msg-type.Tool { color: var(--yellow); }
+.msg-type.Data { color: var(--purple); } .msg-type.System { color: var(--orange); }
+.msg-content { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+
+/* ---- Final Decision Card ---- */
+.final-decision {
+  background: linear-gradient(135deg, rgba(63,185,80,0.1), rgba(88,166,255,0.1));
+  border: 1px solid var(--green); border-radius: var(--radius);
+  padding: 20px; margin: 16px 0;
+}
+.final-decision h2 { color: var(--green); margin-bottom: 12px; }
+
+/* ---- Config Form ---- */
+.config-form { display: block; }
+.config-form.hidden { display: none; }
+.provider-specific { display: none; }
+.provider-specific.active { display: flex; flex-direction: column; gap: 3px; }
+
+/* ---- Toast ---- */
+.toast {
+  position: fixed; top: 20px; right: 20px; z-index: 1000;
+  padding: 12px 24px; border-radius: 8px; font-weight: 600;
+  animation: slideIn 0.3s ease; max-width: 500px;
+}
+.toast.error { background: var(--red); color: #fff; }
+.toast.success { background: var(--green); color: #000; }
+@keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+@media (max-width: 900px) {
+  .dashboard-main { grid-template-columns: 1fr; height: auto; }
+  .agents-panel { max-height: 250px; }
+  .form-grid { grid-template-columns: 1fr; }
+  .stats-bar { gap: 6px; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>📊 TradingAgents</h1>
+    <div class="subtitle">多智能体 LLM 金融交易分析框架</div>
+  </div>
+  <div style="display:flex;gap:8px;">
+    <button class="btn btn-secondary btn-sm" onclick="showHistory()" id="btn-history">📋 历史记录</button>
+    <button class="btn btn-secondary btn-sm" onclick="showConfig()" id="btn-new-analysis" style="display:none;">新建分析</button>
+  </div>
+</header>
+
+<div class="container">
+
+  <!-- ================================================================ -->
+  <!-- CONFIGURATION FORM                                                -->
+  <!-- ================================================================ -->
+  <div id="config-form" class="config-form">
+    <div class="panel">
+      <div class="panel-title">步骤 1：股票代码</div>
+      <div class="form-grid single">
+        <div class="form-group">
+          <label>股票代码</label>
+          <span class="hint">输入股票代码，必要时带交易所后缀（如 SPY, 0700.HK, BTC-USD）</span>
+          <input type="text" id="cfg-ticker" placeholder="SPY" value="SPY">
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">步骤 2：分析日期</div>
+      <div class="form-grid single">
+        <div class="form-group"><label>日期（YYYY-MM-DD）</label><input type="date" id="cfg-date"></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">步骤 3：输出语言</div>
+      <div class="form-grid single">
+        <div class="form-group"><label>报告语言</label><select id="cfg-language"></select></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">步骤 4：分析团队</div>
+      <div class="form-grid single">
+        <div class="form-group"><label>选择 LLM 分析师智能体</label><div class="checkbox-group" id="cfg-analysts"></div></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">步骤 5：研究深度</div>
+      <div class="form-grid single">
+        <div class="form-group"><label>每个团队的辩论轮数</label><select id="cfg-depth"></select></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">步骤 6：LLM 提供商</div>
+      <div class="form-grid">
+        <div class="form-group"><label>提供商</label><select id="cfg-provider"></select></div>
+        <div class="form-group" id="cfg-backend-group" style="display:none;">
+          <label>后端地址（可选覆盖）</label><input type="text" id="cfg-backend-url" placeholder="使用提供商默认地址">
+        </div>
+      </div>
+      <div class="form-grid" style="margin-top:10px;">
+        <div class="form-group"><label>API Key 状态</label><span id="cfg-api-key-status" style="font-size:0.82rem;color:var(--text-dim);">检测中...</span></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">步骤 7：思考模型</div>
+      <div class="form-grid">
+        <div class="form-group"><label>快速思考模型</label><select id="cfg-quick-model"></select></div>
+        <div class="form-group"><label>深度思考模型</label><select id="cfg-deep-model"></select></div>
+      </div>
+    </div>
+
+    <div class="panel" id="panel-provider-config">
+      <div class="panel-title">步骤 8：提供商特定配置</div>
+      <div class="form-grid">
+        <div class="form-group provider-specific" id="cfg-google-thinking">
+          <label>Gemini 思考模式</label>
+          <select id="cfg-google-thinking-level"><option value="">默认</option><option value="high">高</option><option value="minimal">低</option></select>
+        </div>
+        <div class="form-group provider-specific" id="cfg-openai-effort">
+          <label>OpenAI 推理强度</label>
+          <select id="cfg-openai-reasoning"><option value="">默认</option><option value="low">低</option><option value="medium">中</option><option value="high">高</option></select>
+        </div>
+        <div class="form-group provider-specific" id="cfg-anthropic-effort">
+          <label>Claude 努力级别</label>
+          <select id="cfg-anthropic-effort-level"><option value="">默认</option><option value="low">低</option><option value="medium">中</option><option value="high">高</option></select>
+        </div>
+      </div>
+    </div>
+
+    <div style="text-align:center;margin:20px 0;">
+      <button class="btn btn-primary" onclick="startAnalysis()" id="btn-start" style="font-size:1.05rem;padding:12px 36px;">
+        ⚡ 开始分析
+      </button>
+    </div>
+  </div>
+
+  <!-- ================================================================ -->
+  <!-- DASHBOARD                                                         -->
+  <!-- ================================================================ -->
+  <div id="dashboard" class="dashboard">
+    <div class="stats-bar" id="stats-bar">
+      <div class="stat-item"><span class="stat-value" id="stat-agents">0/0</span><span class="stat-label">智能体</span></div>
+      <div class="stat-item"><span class="stat-value" id="stat-llm">0</span><span class="stat-label">LLM 调用</span></div>
+      <div class="stat-item"><span class="stat-value" id="stat-tools">0</span><span class="stat-label">工具调用</span></div>
+      <div class="stat-item"><span class="stat-value" id="stat-tokens">--</span><span class="stat-label">Token ↑↓</span></div>
+      <div class="stat-item"><span class="stat-value" id="stat-reports">0/0</span><span class="stat-label">报告</span></div>
+      <div class="stat-item"><span class="stat-value" id="stat-elapsed">00:00</span><span class="stat-label">耗时</span></div>
+    </div>
+    <div id="phase-indicator" style="display:none;background:rgba(88,166,255,0.1);border:1px solid var(--blue);border-radius:6px;padding:10px 16px;margin-bottom:12px;font-size:0.85rem;color:var(--blue);">
+      <span id="phase-label" style="font-weight:700;"></span>
+      <span id="phase-message" style="margin-left:8px;color:var(--text-dim);"></span>
+    </div>
+
+    <div class="dashboard-main">
+      <!-- Left: Agent Progress -->
+      <div class="agents-panel panel">
+        <div class="panel-title">智能体进度</div>
+        <table class="agent-table" id="agent-table"><tbody></tbody></table>
+      </div>
+
+      <!-- Right: Tabbed Reports -->
+      <div class="panel" style="display:flex;flex-direction:column;overflow:hidden;">
+        <div class="tab-container">
+          <div class="tab-nav" id="tab-nav"></div>
+          <div class="tab-content" id="tab-content"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom: Messages -->
+    <div class="messages-panel panel" id="messages-panel" style="margin-top:12px;">
+      <div class="panel-title" onclick="toggleMessages()">
+        <span>消息与工具调用 <span id="msg-count" style="font-weight:400;font-size:0.75rem;"></span></span>
+        <span id="msg-toggle-icon">▼</span>
+      </div>
+      <div class="msg-list" id="messages-container"></div>
+    </div>
+  </div>
+
+  <!-- ================================================================ -->
+  <!-- HISTORY PANEL                                                     -->
+  <!-- ================================================================ -->
+  <div id="history-panel" style="display:none;">
+    <div class="panel">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <div class="panel-title" style="margin-bottom:0;border-bottom:none;padding-bottom:0;">历史分析记录</div>
+        <button class="btn btn-secondary btn-sm" onclick="showConfig()">返回配置</button>
+      </div>
+    </div>
+    <div id="history-list"></div>
+  </div>
+
+</div>
+
+<script>
+// ================================================================
+// Global State
+// ================================================================
+let configData = null;
+let agentStatus = {};
+let reportSections = {};   // { section_key: { title, content } }
+let allMessages = [];
+let elapsedTimer = null;
+let elapsedSeconds = 0;
+let analysisRunning = false;
+let currentTab = '';
+let msgCollapsed = false;
+
+// Tab definitions: key → { label, reportKey, isAnalyst, analystKey }
+const TAB_DEFS = [
+  { key: 'market',    label: '市场分析',   reportKey: 'market_report',       isAnalyst: true,  analystKey: 'market', agent: 'Market Analyst' },
+  { key: 'sentiment', label: '情绪分析',   reportKey: 'sentiment_report',    isAnalyst: true,  analystKey: 'social', agent: 'Sentiment Analyst' },
+  { key: 'news',      label: '新闻分析',   reportKey: 'news_report',         isAnalyst: true,  analystKey: 'news', agent: 'News Analyst' },
+  { key: 'fundamentals', label: '基本面分析', reportKey: 'fundamentals_report', isAnalyst: true, analystKey: 'fundamentals', agent: 'Fundamentals Analyst' },
+  { key: 'research_bull', label: '看多观点', reportKey: 'research_bull',     isAnalyst: false, agent: 'Bull Researcher' },
+  { key: 'research_bear', label: '看空观点', reportKey: 'research_bear',     isAnalyst: false, agent: 'Bear Researcher' },
+  { key: 'research_manager', label: '研究裁决', reportKey: 'research_manager', isAnalyst: false, agent: 'Research Manager' },
+  { key: 'trader',    label: '交易计划',   reportKey: 'trader_investment_plan', isAnalyst: false, agent: 'Trader' },
+  { key: 'risk_aggressive', label: '激进分析', reportKey: 'risk_aggressive', isAnalyst: false, agent: 'Aggressive Analyst' },
+  { key: 'risk_conservative', label: '保守分析', reportKey: 'risk_conservative', isAnalyst: false, agent: 'Conservative Analyst' },
+  { key: 'risk_neutral', label: '中立分析', reportKey: 'risk_neutral', isAnalyst: false, agent: 'Neutral Analyst' },
+  { key: 'decision',  label: '最终决策',   reportKey: 'final_trade_decision', isAnalyst: false, agent: 'Portfolio Manager' },
+];
+
+// Tab state: 'hidden' | 'pending' | 'in_progress' | 'completed'
+let tabStates = {};
+
+// ================================================================
+// Init
+// ================================================================
+document.addEventListener('DOMContentLoaded', async () => {
+  document.getElementById('cfg-date').value = new Date().toISOString().slice(0, 10);
+  try {
+    const resp = await fetch('/api/config/defaults');
+    configData = await resp.json();
+    populateForm();
+  } catch (e) {
+    showToast('加载配置失败：' + e.message, 'error');
+  }
+});
+
+function populateForm() {
+  const langSel = document.getElementById('cfg-language');
+  configData.languages.forEach(l => {
+    const opt = document.createElement('option'); opt.value = l; opt.textContent = l;
+    if (l === configData.defaults.output_language) opt.selected = true;
+    langSel.appendChild(opt);
+  });
+
+  const analystDiv = document.getElementById('cfg-analysts');
+  configData.analysts.forEach(a => {
+    const label = document.createElement('label');
+    label.className = 'checkbox-item selected';
+    label.innerHTML = `<input type="checkbox" value="${a.key}" checked onchange="this.parentElement.classList.toggle('selected', this.checked)"> ${a.label}`;
+    label.title = a.description; analystDiv.appendChild(label);
+  });
+
+  const depthSel = document.getElementById('cfg-depth');
+  configData.research_depths.forEach(d => {
+    const opt = document.createElement('option'); opt.value = d.value; opt.textContent = d.label;
+    if (d.value === 1) opt.selected = true; depthSel.appendChild(opt);
+  });
+
+  const provSel = document.getElementById('cfg-provider');
+  configData.providers.forEach(p => {
+    const opt = document.createElement('option'); opt.value = p.key; opt.textContent = p.display;
+    if (p.key === configData.defaults.llm_provider) opt.selected = true;
+    provSel.appendChild(opt);
+  });
+  provSel.addEventListener('change', onProviderChange);
+  onProviderChange();
+}
+
+function onProviderChange() {
+  const provider = document.getElementById('cfg-provider').value;
+  updateModelSelects(provider); updateProviderConfig(provider);
+  updateBackendUrl(provider); checkApiKeyStatus(provider);
+}
+
+function updateModelSelects(provider) {
+  const models = configData.model_options[provider] || { quick: [], deep: [] };
+  ['quick', 'deep'].forEach(mode => {
+    const sel = document.getElementById(`cfg-${mode}-model`);
+    sel.innerHTML = '';
+    (models[mode] || []).forEach(m => {
+      const opt = document.createElement('option'); opt.value = m.value; opt.textContent = m.label; sel.appendChild(opt);
+    });
+    const custom = document.createElement('option'); custom.value = 'custom'; custom.textContent = '自定义模型 ID...'; sel.appendChild(custom);
+    const defaultModel = mode === 'quick' ? configData.defaults.quick_think_llm : configData.defaults.deep_think_llm;
+    if (Array.from(sel.options).some(o => o.value === defaultModel)) sel.value = defaultModel;
+  });
+}
+
+function updateProviderConfig(provider) {
+  document.querySelectorAll('.provider-specific').forEach(el => el.classList.remove('active'));
+  if (provider === 'google') document.getElementById('cfg-google-thinking').classList.add('active');
+  else if (provider === 'openai') document.getElementById('cfg-openai-effort').classList.add('active');
+  else if (provider === 'anthropic') document.getElementById('cfg-anthropic-effort').classList.add('active');
+  document.getElementById('panel-provider-config').style.display = ['google','openai','anthropic'].includes(provider) ? '' : 'none';
+}
+
+function updateBackendUrl(provider) {
+  const g = document.getElementById('cfg-backend-group');
+  const inp = document.getElementById('cfg-backend-url');
+  const prov = configData.providers.find(p => p.key === provider);
+  if (prov && prov.default_url) { g.style.display = ''; inp.placeholder = prov.default_url; }
+  else { g.style.display = 'none'; inp.value = ''; }
+}
+
+async function checkApiKeyStatus(provider) {
+  const el = document.getElementById('cfg-api-key-status');
+  if (['ollama'].includes(provider)) { el.textContent = '✓ 无需 API Key（本地模型）'; el.style.color = 'var(--green)'; }
+  else { el.textContent = '使用 .env 文件中的 Key（服务端配置）'; el.style.color = 'var(--text-dim)'; }
+}
+
+// ================================================================
+// Analysis
+// ================================================================
+async function startAnalysis() {
+  if (analysisRunning) return;
+  analysisRunning = true;
+
+  const ticker = document.getElementById('cfg-ticker').value.trim() || 'SPY';
+  const provider = document.getElementById('cfg-provider').value;
+  const backendUrl = document.getElementById('cfg-backend-url').value.trim() || null;
+  let quickModel = document.getElementById('cfg-quick-model').value;
+  let deepModel = document.getElementById('cfg-deep-model').value;
+  if (quickModel === 'custom') { quickModel = prompt('请输入自定义快速思考模型 ID：'); if (!quickModel) { analysisRunning = false; return; } }
+  if (deepModel === 'custom') { deepModel = prompt('请输入自定义深度思考模型 ID：'); if (!deepModel) { analysisRunning = false; return; } }
+
+  const selectedAnalysts = getSelectedAnalysts();
+  if (!selectedAnalysts.length) { showToast('请至少选择一位分析师。', 'error'); analysisRunning = false; return; }
+
+  const payload = {
+    ticker, analysis_date: document.getElementById('cfg-date').value,
+    asset_type: detectAssetType(ticker), analysts: selectedAnalysts,
+    research_depth: parseInt(document.getElementById('cfg-depth').value),
+    llm_provider: provider, backend_url: backendUrl,
+    quick_think_llm: quickModel, deep_think_llm: deepModel,
+    output_language: document.getElementById('cfg-language').value,
+    google_thinking_level: document.getElementById('cfg-google-thinking-level')?.value || null,
+    openai_reasoning_effort: document.getElementById('cfg-openai-reasoning')?.value || null,
+    anthropic_effort: document.getElementById('cfg-anthropic-effort-level')?.value || null,
+  };
+
+  showDashboard(payload);
+
+  try {
+    const response = await fetch('/api/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    if (!response.ok) {
+      let errMsg = `HTTP ${response.status}`;
+      try { const err = await response.json(); errMsg = err.detail || errMsg; } catch (e) {}
+      showToast('启动分析失败：' + errMsg, 'error'); analysisRunning = false; showConfig(); return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder(); let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n'); buffer = lines.pop();
+      let eventType = '';
+      for (const line of lines) {
+        if (line.startsWith('event: ')) { eventType = line.slice(7).trim(); }
+        else if (line.startsWith('data: ')) {
+          try { handleSSEEvent(eventType, JSON.parse(line.slice(6))); } catch (e) {}
+        }
+      }
+    }
+  } catch (e) {
+    showToast('分析失败：' + e.message, 'error');
+    analysisRunning = false; stopElapsedTimer();
+  }
+}
+
+function detectAssetType(ticker) {
+  return ['-USD','-USDT','-USDC','-BTC','-ETH'].some(s => ticker.toUpperCase().endsWith(s)) ? 'crypto' : 'stock';
+}
+function getSelectedAnalysts() {
+  return Array.from(document.querySelectorAll('#cfg-analysts input[type="checkbox"]:checked')).map(cb => cb.value);
+}
+
+// ================================================================
+// SSE Event Handling
+// ================================================================
+function handleSSEEvent(type, data) {
+  switch (type) {
+    case 'connected': break;
+    case 'agent_status': updateAgentStatus(data.agent, data.status); break;
+    case 'report_update': updateReportSection(data.section, data.title, data.content); break;
+    case 'message': appendMessage(data); break;
+    case 'tool_call': appendToolCall(data); break;
+    case 'stats': updateStats(data); break;
+    case 'phase':
+      document.getElementById('phase-indicator').style.display = '';
+      document.getElementById('phase-label').textContent = '📍 ' + (data.label || data.phase);
+      document.getElementById('phase-message').textContent = data.message || '';
+      break;
+    case 'log': appendLog(data); break;
+    case 'complete': onAnalysisComplete(data); break;
+    case 'error':
+      showToast('分析错误：' + data.message, 'error');
+      appendLog({level: 'error', message: '分析失败：' + data.message});
+      if (data.traceback) appendLog({level: 'error', message: data.traceback});
+      analysisRunning = false; stopElapsedTimer();
+      break;
+  }
+}
+
+// ---- Tabs ----
+function setupTabs(selectedAnalysts) {
+  tabStates = {};
+  const nav = document.getElementById('tab-nav');
+  const content = document.getElementById('tab-content');
+  nav.innerHTML = ''; content.innerHTML = '';
+
+  // Determine which tabs to show
+  const visibleTabs = TAB_DEFS.filter(t => {
+    if (t.isAnalyst) return selectedAnalysts.includes(t.analystKey);
+    return true; // Always show research, trader, decision tabs
+  });
+
+  visibleTabs.forEach((t, i) => {
+    tabStates[t.key] = 'pending';
+
+    // Nav button
+    const btn = document.createElement('button');
+    btn.className = 'tab-btn' + (i === 0 ? ' active' : '');
+    btn.innerHTML = `${t.label} <span class="badge pending"></span>`;
+    btn.onclick = () => switchTab(t.key);
+    btn.id = 'tab-btn-' + t.key;
+    nav.appendChild(btn);
+
+    // Content pane
+    const pane = document.createElement('div');
+    pane.className = 'tab-pane' + (i === 0 ? ' active' : '');
+    pane.id = 'tab-pane-' + t.key;
+    pane.innerHTML = '<div class="tab-placeholder">等待分析数据...</div>';
+    content.appendChild(pane);
+  });
+
+  if (visibleTabs.length > 0) currentTab = visibleTabs[0].key;
+}
+
+function switchTab(key) {
+  currentTab = key;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+  const btn = document.getElementById('tab-btn-' + key);
+  const pane = document.getElementById('tab-pane-' + key);
+  if (btn) btn.classList.add('active');
+  if (pane) pane.classList.add('active');
+}
+
+function updateTabBadge(tabKey, status) {
+  tabStates[tabKey] = status;
+  const btn = document.getElementById('tab-btn-' + tabKey);
+  if (!btn) return;
+  const badge = btn.querySelector('.badge');
+  if (badge) { badge.className = 'badge ' + status; }
+  // Auto-switch to in_progress tab on first activity
+  if (status === 'in_progress' && currentTab !== tabKey) {
+    // Don't auto-switch away from a tab the user manually selected
+  }
+}
+
+// ---- Report Section → Tab ----
+function updateReportSection(section, title, content) {
+  reportSections[section] = { title, content };
+
+  // Find which tab this section belongs to
+  const tab = TAB_DEFS.find(t => t.reportKey === section);
+  if (!tab) return;
+
+  updateTabBadge(tab.key, 'completed');
+
+  const pane = document.getElementById('tab-pane-' + tab.key);
+  if (pane) {
+    pane.innerHTML = '<div class="report-content">' + marked.parse(content) + '</div>';
+  }
+
+  // Update report count
+  const total = Object.keys(reportSections).length;
+  const completed = Object.values(reportSections).filter(v => v.content).length;
+  document.getElementById('stat-reports').textContent = `${completed}/${Object.keys(tabStates).length || total}`;
+}
+
+// ---- Agent Status → Tab badge ----
+function updateAgentStatus(agent, status) {
+  agentStatus[agent] = status;
+  renderAgentTable();
+  updateAgentCount();
+
+  // Update tab badges based on agent status
+  const analystMap = { 'Market Analyst': 'market', 'Sentiment Analyst': 'sentiment',
+    'News Analyst': 'news', 'Fundamentals Analyst': 'fundamentals' };
+  if (analystMap[agent]) {
+    const tabKey = analystMap[agent];
+    if (status === 'in_progress') updateTabBadge(tabKey, 'in_progress');
+    else if (status === 'completed') updateTabBadge(tabKey, 'completed');
+  }
+  // Research team
+  const researchAgentTab = {
+    'Bull Researcher': 'research_bull',
+    'Bear Researcher': 'research_bear',
+    'Research Manager': 'research_manager',
+  };
+  if (researchAgentTab[agent]) {
+    const tabKey = researchAgentTab[agent];
+    if (status === 'in_progress') updateTabBadge(tabKey, 'in_progress');
+    else if (status === 'completed') updateTabBadge(tabKey, 'completed');
+  }
+  if (agent === 'Trader') {
+    if (status === 'in_progress') updateTabBadge('trader', 'in_progress');
+    else if (status === 'completed') updateTabBadge('trader', 'completed');
+  }
+  const riskAgentTab = {
+    'Aggressive Analyst': 'risk_aggressive',
+    'Conservative Analyst': 'risk_conservative',
+    'Neutral Analyst': 'risk_neutral',
+    'Portfolio Manager': 'decision',
+  };
+  if (riskAgentTab[agent]) {
+    const tabKey = riskAgentTab[agent];
+    if (status === 'in_progress') updateTabBadge(tabKey, 'in_progress');
+    else if (status === 'completed') updateTabBadge(tabKey, 'completed');
+  }
+}
+
+function renderAgentTable() {
+  const teams = {
+    '分析团队': ['Market Analyst','Sentiment Analyst','News Analyst','Fundamentals Analyst'],
+    '研究团队': ['Bull Researcher','Bear Researcher','Research Manager'],
+    '交易团队': ['Trader'],
+    '风险管理': ['Aggressive Analyst','Neutral Analyst','Conservative Analyst'],
+    '投资组合管理': ['Portfolio Manager'],
+  };
+  const visibleAgents = new Set(Object.keys(agentStatus));
+  let html = '';
+  for (const [team, agents] of Object.entries(teams)) {
+    const activeAgents = agents.filter(a => visibleAgents.has(a));
+    if (!activeAgents.length) continue;
+    html += `<tr class="team-row"><td colspan="2">${team}</td></tr>`;
+    for (const agent of activeAgents) {
+      const st = agentStatus[agent] || 'pending';
+      html += `<tr><td class="status-${st}"><span class="status-dot"></span>${agent}</td><td class="status-${st}">${statusText(st)}</td></tr>`;
+    }
+  }
+  document.querySelector('#agent-table tbody').innerHTML = html;
+}
+
+function updateAgentCount() {
+  const total = Object.keys(agentStatus).length;
+  const comp = Object.values(agentStatus).filter(s => s === 'completed').length;
+  document.getElementById('stat-agents').textContent = `${comp}/${total}`;
+}
+
+// ---- Messages ----
+function appendMessage(data) { allMessages.push({ ...data, _type: 'message' }); renderMessages(); }
+function appendToolCall(data) { allMessages.push({ ...data, _type: 'tool', timestamp: data.timestamp || '' }); renderMessages(); }
+function appendLog(data) { allMessages.push({ _type: 'log', level: data.level || 'info', content: data.message, timestamp: new Date().toLocaleTimeString() }); renderMessages(); }
+
+function renderMessages() {
+  const container = document.getElementById('messages-container');
+  const recent = allMessages.slice(-60).reverse();
+  document.getElementById('msg-count').textContent = `(${allMessages.length})`;
+  container.innerHTML = recent.map(m => {
+    const ts = m.timestamp || '';
+    if (m._type === 'log') {
+      const color = m.level === 'error' ? 'var(--red)' : m.level === 'warn' ? 'var(--yellow)' : 'var(--text-dim)';
+      return `<div class="msg-row"><span class="msg-time">${ts}</span><span class="msg-type" style="color:${color}">日志</span><span class="msg-content" style="color:${color}">${escapeHtml(m.content)}</span></div>`;
+    }
+    if (m._type === 'tool') {
+      return `<div class="msg-row"><span class="msg-time">${ts}</span><span class="msg-type Tool">工具</span><span class="msg-content">${escapeHtml(m.name)}: ${escapeHtml(m.args||'')}</span></div>`;
+    }
+    const content = (m.content||'').length > 200 ? m.content.slice(0,197)+'...' : m.content;
+    return `<div class="msg-row"><span class="msg-time">${ts}</span><span class="msg-type ${m.type||''}">${m.type||''}</span><span class="msg-content">${escapeHtml(content)}</span></div>`;
+  }).join('');
+}
+
+function toggleMessages() {
+  msgCollapsed = !msgCollapsed;
+  const panel = document.getElementById('messages-panel');
+  const icon = document.getElementById('msg-toggle-icon');
+  if (msgCollapsed) { panel.classList.add('collapsed'); icon.textContent = '▶'; }
+  else { panel.classList.remove('collapsed'); icon.textContent = '▼'; }
+}
+
+// ---- Stats ----
+function updateStats(data) {
+  document.getElementById('stat-llm').textContent = data.llm_calls || 0;
+  document.getElementById('stat-tools').textContent = data.tool_calls || 0;
+  const tin = data.tokens_in||0, tout = data.tokens_out||0;
+  if (tin>0||tout>0) document.getElementById('stat-tokens').textContent = `${fmtTokens(tin)}↑ ${fmtTokens(tout)}↓`;
+}
+
+// ---- Complete ----
+function onAnalysisComplete(data) {
+  analysisRunning = false; stopElapsedTimer();
+  document.getElementById('stat-elapsed').textContent = data.elapsed_seconds
+    ? `${String(Math.floor(data.elapsed_seconds/60)).padStart(2,'0')}:${String(Math.floor(data.elapsed_seconds%60)).padStart(2,'0')}`
+    : '已完成';
+  // Switch to the final decision tab
+  switchTab('decision');
+  document.getElementById('btn-new-analysis').style.display = '';
+}
+
+// ================================================================
+// View Switching
+// ================================================================
+function showDashboard(payload) {
+  document.getElementById('config-form').classList.add('hidden');
+  document.getElementById('dashboard').classList.add('active');
+  document.getElementById('btn-new-analysis').style.display = 'none';
+
+  // Reset state
+  agentStatus = {}; reportSections = {}; allMessages = []; elapsedSeconds = 0;
+  document.getElementById('messages-container').innerHTML = '';
+  document.getElementById('stat-agents').textContent = '0/0';
+  document.getElementById('stat-llm').textContent = '0';
+  document.getElementById('stat-tools').textContent = '0';
+  document.getElementById('stat-tokens').textContent = '--';
+  document.getElementById('stat-reports').textContent = '0/0';
+  document.getElementById('stat-elapsed').textContent = '00:00';
+  document.getElementById('phase-indicator').style.display = 'none';
+  document.querySelector('#agent-table tbody').innerHTML = '';
+
+  // Init tabs
+  setupTabs(payload.analysts || []);
+
+  // Init agent status
+  const analystMap = { market:'Market Analyst', social:'Sentiment Analyst', news:'News Analyst', fundamentals:'Fundamentals Analyst' };
+  (payload.analysts||[]).forEach(key => { if (analystMap[key]) agentStatus[analystMap[key]] = 'pending'; });
+  ['Bull Researcher','Bear Researcher','Research Manager','Trader',
+   'Aggressive Analyst','Neutral Analyst','Conservative Analyst','Portfolio Manager'].forEach(a => { agentStatus[a] = 'pending'; });
+  renderAgentTable(); updateAgentCount();
+  startElapsedTimer();
+}
+
+function showConfig() {
+  document.getElementById('config-form').classList.remove('hidden');
+  document.getElementById('dashboard').classList.remove('active');
+  document.getElementById('history-panel').style.display = 'none';
+  document.getElementById('btn-new-analysis').style.display = 'none';
+  stopElapsedTimer();
+}
+
+// ================================================================
+// Helpers
+// ================================================================
+function fmtTokens(n) { return n>=1000 ? (n/1000).toFixed(1)+'k' : String(n); }
+function escapeHtml(s) { const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+function showToast(msg, type) { const t=document.createElement('div'); t.className=`toast ${type}`; t.textContent=msg; document.body.appendChild(t); setTimeout(()=>t.remove(),5000); }
+function startElapsedTimer() { stopElapsedTimer(); elapsedTimer=setInterval(()=>{elapsedSeconds++;const m=String(Math.floor(elapsedSeconds/60)).padStart(2,'0');const s=String(elapsedSeconds%60).padStart(2,'0');document.getElementById('stat-elapsed').textContent=`${m}:${s}`;},1000); }
+function stopElapsedTimer() { if(elapsedTimer){clearInterval(elapsedTimer);elapsedTimer=null;} }
+function statusText(s) { const m={pending:'等待中',in_progress:'进行中',completed:'已完成',error:'错误'}; return m[s]||s; }
+
+// ================================================================
+// History
+// ================================================================
+async function showHistory() {
+  document.getElementById('config-form').classList.add('hidden');
+  document.getElementById('dashboard').classList.remove('active');
+  document.getElementById('history-panel').style.display = '';
+
+  try {
+    const resp = await fetch('/api/history');
+    const data = await resp.json();
+    renderHistoryList(data.items || []);
+  } catch (e) {
+    showToast('加载历史记录失败：' + e.message, 'error');
+  }
+}
+
+function renderHistoryList(items) {
+  const container = document.getElementById('history-list');
+  if (!items.length) {
+    container.innerHTML = '<div class="panel"><div class="tab-placeholder">暂无历史分析记录。完成一次分析后会自动保存。</div></div>';
+    return;
+  }
+  container.innerHTML = items.map(item => {
+    const savedDate = item.saved_at ? new Date(item.saved_at).toLocaleString('zh-CN') : '';
+    const elapsed = item.elapsed_seconds
+      ? `${Math.floor(item.elapsed_seconds/60)}分${Math.floor(item.elapsed_seconds%60)}秒`
+      : '';
+    return `<div class="panel" style="display:flex;justify-content:space-between;align-items:center;padding:14px 20px;">
+      <div style="flex:1;">
+        <span style="font-weight:700;font-size:1rem;">${escapeHtml(item.ticker)}</span>
+        <span style="color:var(--text-dim);margin-left:12px;font-size:0.82rem;">分析日期: ${item.analysis_date}</span>
+        <span style="color:var(--text-dim);margin-left:12px;font-size:0.82rem;">报告: ${item.report_count} 份</span>
+        <span style="color:var(--text-dim);margin-left:12px;font-size:0.82rem;">耗时: ${elapsed}</span>
+        <span style="color:var(--text-dim);margin-left:12px;font-size:0.78rem;">保存于: ${savedDate}</span>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-primary btn-sm" onclick="viewHistory('${item.id}')">查看</button>
+        <button class="btn btn-secondary btn-sm" onclick="deleteHistory('${item.id}')" style="color:var(--red);border-color:var(--red);">删除</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function viewHistory(analysisId) {
+  try {
+    const resp = await fetch('/api/history/' + analysisId);
+    if (!resp.ok) { showToast('加载分析记录失败', 'error'); return; }
+    const data = await resp.json();
+
+    // Switch to dashboard view
+    document.getElementById('history-panel').style.display = 'none';
+    document.getElementById('dashboard').classList.add('active');
+
+    // Setup tabs with all reports
+    const allAnalystKeys = ['market', 'social', 'news', 'fundamentals'];
+    setupTabs(allAnalystKeys);
+
+    // Reset state
+    agentStatus = {};
+    allMessages = [];
+    reportSections = {};
+    elapsedSeconds = data.elapsed_seconds || 0;
+    stopElapsedTimer();
+    document.getElementById('messages-container').innerHTML = '';
+    document.getElementById('stat-llm').textContent = data.stats?.llm_calls || '-';
+    document.getElementById('stat-tools').textContent = data.stats?.tool_calls || '-';
+    const tin = data.stats?.tokens_in || 0, tout = data.stats?.tokens_out || 0;
+    document.getElementById('stat-tokens').textContent = (tin||tout) ? `${fmtTokens(tin)}↑ ${fmtTokens(tout)}↓` : '--';
+    document.getElementById('stat-elapsed').textContent = data.elapsed_seconds
+      ? `${String(Math.floor(data.elapsed_seconds/60)).padStart(2,'0')}:${String(Math.floor(data.elapsed_seconds%60)).padStart(2,'0')}`
+      : '--';
+
+    // Populate reports from saved data
+    const reportMap = data.reports || {};
+    const allAgentNames = ['Market Analyst','Sentiment Analyst','News Analyst','Fundamentals Analyst',
+      'Bull Researcher','Bear Researcher','Research Manager','Trader',
+      'Aggressive Analyst','Conservative Analyst','Neutral Analyst','Portfolio Manager'];
+    allAgentNames.forEach(a => { agentStatus[a] = 'completed'; });
+    renderAgentTable();
+    updateAgentCount();
+
+    // Load each report section
+    for (const [section, content] of Object.entries(reportMap)) {
+      if (!content) continue;
+      reportSections[section] = { title: section, content };
+      const tab = TAB_DEFS.find(t => t.reportKey === section);
+      if (tab) {
+        updateTabBadge(tab.key, 'completed');
+        const pane = document.getElementById('tab-pane-' + tab.key);
+        if (pane) {
+          pane.innerHTML = '<div class="report-content">' + marked.parse(content) + '</div>';
+        }
+      }
+    }
+
+    const reportCount = Object.values(reportMap).filter(v => v).length;
+    document.getElementById('stat-reports').textContent = `${reportCount}/${Object.keys(tabStates).length}`;
+    document.getElementById('btn-new-analysis').style.display = '';
+
+    // Switch to first tab with content or first tab
+    const firstTab = TAB_DEFS.find(t => reportMap[t.reportKey]) || TAB_DEFS[0];
+    switchTab(firstTab.key);
+  } catch (e) {
+    showToast('加载分析记录失败：' + e.message, 'error');
+  }
+}
+
+async function deleteHistory(analysisId) {
+  if (!confirm('确定要删除这条分析记录吗？此操作不可撤销。')) return;
+  try {
+    const resp = await fetch('/api/history/' + analysisId, { method: 'DELETE' });
+    if (!resp.ok) { showToast('删除失败', 'error'); return; }
+    showToast('已删除', 'success');
+    showHistory(); // Refresh list
+  } catch (e) {
+    showToast('删除失败：' + e.message, 'error');
+  }
+}
+</script>
+</body>
+</html>

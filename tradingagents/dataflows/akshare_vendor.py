@@ -992,3 +992,227 @@ def get_insider_transactions_akshare(ticker: str) -> str:
         ticker,
         "akshare does not support insider transactions",
     )
+
+
+# ---------------------------------------------------------------------------
+# Extended tools: fund flow, LHB, institute holdings
+# ---------------------------------------------------------------------------
+
+
+def get_fund_flow_akshare(ticker: str, curr_date: str = None) -> str:
+    """个股资金流向 via akshare (同花顺数据中心).
+
+    Returns recent capital flow data: inflow, outflow, net flow, turnover rate.
+    Only covers A-shares (CN market).
+    """
+    market, ak_sym, display = _extract_market(ticker)
+    if market != "cn":
+        raise NoMarketDataError(
+            ticker, ak_sym,
+            "akshare fund flow only available for A-share stocks",
+        )
+
+    import akshare as ak
+    bare_code = ak_sym.replace("SH", "").replace("SZ", "")
+
+    try:
+        df = ak.stock_fund_flow_individual(symbol="即时")
+    except _NETWORK_ERRORS:
+        raise
+    except Exception as exc:
+        raise NoMarketDataError(
+            ticker, ak_sym, f"akshare fund flow error: {exc}"
+        ) from exc
+
+    if df is None or df.empty:
+        raise NoMarketDataError(ticker, ak_sym, "fund flow data empty")
+
+    # The column is '股票代码' in the DataFrame
+    code_col = "股票代码" if "股票代码" in df.columns else df.columns[1]
+    row = df[df[code_col].astype(str).str.strip() == bare_code]
+    if row.empty:
+        raise NoMarketDataError(
+            ticker, ak_sym,
+            f"no fund flow data for {display} (may not be in top flow list today)",
+        )
+
+    r = row.iloc[0]
+    lines = [
+        f"# 资金流向 for {display}",
+        f"# Source: akshare (同花顺数据中心)",
+        f"# Retrieved: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        "",
+    ]
+    col_map = {
+        "最新价": "Latest Price",
+        "涨跌幅": "Change %",
+        "换手率": "Turnover Rate",
+        "流入资金": "Inflow",
+        "流出资金": "Outflow",
+        "净额": "Net Flow",
+        "成交额": "Total Volume",
+    }
+    for cn_label, en_label in col_map.items():
+        if cn_label in r.index:
+            val = r[cn_label]
+            lines.append(f"- {en_label}: {val}")
+    return "\n".join(lines)
+
+
+def get_lhb_detail_akshare(ticker: str, curr_date: str = None) -> str:
+    """龙虎榜详情 via akshare (东方财富).
+
+    Returns recent dragon-tiger board appearance details for a stock:
+    buy/sell amounts by seats, net buy amount,上榜 reason, post-listing returns.
+    Only covers A-shares.
+    """
+    market, ak_sym, display = _extract_market(ticker)
+    if market != "cn":
+        raise NoMarketDataError(
+            ticker, ak_sym,
+            "akshare LHB detail only available for A-share stocks",
+        )
+
+    import akshare as ak
+    from datetime import timedelta
+    bare_code = ak_sym.replace("SH", "").replace("SZ", "")
+
+    end_dt = datetime.now()
+    start_dt = end_dt - timedelta(days=60)
+    try:
+        df = ak.stock_lhb_detail_em(
+            start_date=start_dt.strftime("%Y%m%d"),
+            end_date=end_dt.strftime("%Y%m%d"),
+        )
+    except _NETWORK_ERRORS:
+        raise
+    except Exception as exc:
+        raise NoMarketDataError(
+            ticker, ak_sym, f"akshare LHB error: {exc}"
+        ) from exc
+
+    if df is None or df.empty:
+        raise NoMarketDataError(ticker, ak_sym, "LHB data empty")
+
+    code_col = "代码" if "代码" in df.columns else df.columns[1]
+    rows = df[df[code_col].astype(str).str.strip() == bare_code]
+    if rows.empty:
+        raise NoMarketDataError(
+            ticker, ak_sym,
+            f"{display} 近60日未上龙虎榜",
+        )
+
+    lines = [
+        f"# 龙虎榜详情 for {display}",
+        f"# Source: akshare (东方财富数据中心)",
+        f"# Retrieved: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        "",
+    ]
+    for _, r in rows.head(10).iterrows():
+        lines.append(
+            f"- {r.get('上榜日', '?')} | "
+            f"涨跌幅: {r.get('涨跌幅', '?')} | "
+            f"净买额: {r.get('龙虎榜净买额', '?')} | "
+            f"买入: {r.get('龙虎榜买入额', '?')} | "
+            f"卖出: {r.get('龙虎榜卖出额', '?')} | "
+            f"原因: {r.get('上榜原因', '?')}"
+        )
+        # Post-LHB returns if available
+        post = []
+        for d in ["1日", "2日", "5日", "10日"]:
+            col = f"上榜后{d}"
+            if col in r.index and pd.notna(r[col]):
+                post.append(f"后{d}: {r[col]}")
+        if post:
+            lines.append(f"  上榜后表现: {' | '.join(post)}")
+
+    if len(rows) == 0:
+        lines.append(f"(无近期龙虎榜记录)")
+    return "\n".join(lines)
+
+
+def get_institute_hold_akshare(ticker: str, curr_date: str = None) -> str:
+    """机构持仓 via akshare (新浪财经).
+
+    Returns institutional holdings data: number of institutions, holding
+    ratio, circulating share ratio for the latest reporting period.
+    Only covers A-shares.
+    """
+    market, ak_sym, display = _extract_market(ticker)
+    if market != "cn":
+        raise NoMarketDataError(
+            ticker, ak_sym,
+            "akshare institute hold only available for A-share stocks",
+        )
+
+    import akshare as ak
+    bare_code = ak_sym.replace("SH", "").replace("SZ", "")
+
+    # Try recent quarters. The naming convention is YYYYQ where Q is
+    # 1/2/3/4 for each reporting period. Start from the most recent
+    # and work backwards until we find data.
+    current_year = datetime.now().year
+    current_month = datetime.now().month
+    # Determine which quarter's data is most likely available
+    if current_month >= 5:
+        latest = f"{current_year}1"  # Q1 report available after April
+    else:
+        latest = f"{current_year-1}4"
+    year = int(latest[:4])
+    qtr = int(latest[4])
+    quarters = []
+    for _ in range(8):  # try up to 8 quarters back
+        quarters.append(f"{year}{qtr}")
+        qtr -= 1
+        if qtr == 0:
+            qtr = 4
+            year -= 1
+
+    all_rows = []
+    for q in quarters:
+        try:
+            df = ak.stock_institute_hold(symbol=q)
+        except _NETWORK_ERRORS:
+            raise
+        except Exception:
+            continue
+
+        if df is None or df.empty:
+            continue
+
+        code_col = "证券代码" if "证券代码" in df.columns else df.columns[1]
+        row = df[df[code_col].astype(str).str.strip() == bare_code]
+        if not row.empty:
+            all_rows.append((q, row.iloc[0]))
+
+    if not all_rows:
+        raise NoMarketDataError(
+            ticker, ak_sym,
+            f"no institute holding data for {display}",
+        )
+
+    lines = [
+        f"# 机构持仓 for {display}",
+        f"# Source: akshare (新浪财经)",
+        f"# Retrieved: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        "",
+    ]
+    for period, r in all_rows:
+        name = r.get("证券简称", "?")
+        inst_count = r.get("机构数", "?")
+        inst_change = r.get("机构数变化", "?")
+        hold_ratio = r.get("持股比例", "?")
+        hold_change = r.get("持股比例增幅", "?")
+        circ_ratio = r.get("占流通股比例", "?")
+        circ_change = r.get("占流通股比例增幅", "?")
+
+        period_label = f"{period[:4]}年{'Q1' if period[4]=='1' else 'Q2' if period[4]=='2' else 'Q3' if period[4]=='3' else 'Q4'}"
+        lines.append(
+            f"## {period_label}\n"
+            f"- 证券简称: {name}\n"
+            f"- 机构数: {inst_count} (变化: {inst_change})\n"
+            f"- 持股比例: {hold_ratio} (变化: {hold_change})\n"
+            f"- 占流通股比例: {circ_ratio} (变化: {circ_change})\n"
+        )
+
+    return "\n".join(lines)

@@ -34,6 +34,9 @@ from .akshare_vendor import (
     get_insider_transactions_akshare as get_akshare_insider_transactions,
     get_news_akshare as get_akshare_news,
     get_global_news_akshare as get_akshare_global_news,
+    get_fund_flow_akshare,
+    get_lhb_detail_akshare,
+    get_institute_hold_akshare,
 )
 
 # Configuration and routing logic
@@ -42,9 +45,10 @@ from .config import get_config
 # Tools organized by category
 TOOLS_CATEGORIES = {
     "core_stock_apis": {
-        "description": "OHLCV stock price data",
+        "description": "OHLCV stock price data & fund flow",
         "tools": [
-            "get_stock_data"
+            "get_stock_data",
+            "get_fund_flow",
         ]
     },
     "technical_indicators": {
@@ -54,22 +58,24 @@ TOOLS_CATEGORIES = {
         ]
     },
     "fundamental_data": {
-        "description": "Company fundamentals",
+        "description": "Company fundamentals & holdings",
         "tools": [
             "get_fundamentals",
             "get_balance_sheet",
             "get_cashflow",
-            "get_income_statement"
+            "get_income_statement",
+            "get_institute_hold",
         ]
     },
     "news_data": {
-        "description": "News and insider data",
+        "description": "News, insider data & LHB",
         "tools": [
             "get_news",
             "get_global_news",
             "get_insider_transactions",
+            "get_lhb_detail",
         ]
-    }
+    },
 }
 
 VENDOR_LIST = [
@@ -77,6 +83,20 @@ VENDOR_LIST = [
     "yfinance",
     "alpha_vantage",
 ]
+
+
+def _no_data(method: str, vendor: str):
+    """Return a callable that always raises NoMarketDataError.
+
+    Used as a stub for vendors that don't support a particular tool.
+    """
+    def _raise(*args, **kwargs):
+        raise NoMarketDataError(
+            args[0] if args else "unknown",
+            args[0] if args else "unknown",
+            f"{vendor} does not support {method}",
+        )
+    return _raise
 
 # Mapping of methods to their vendor-specific implementations
 VENDOR_METHODS = {
@@ -128,6 +148,21 @@ VENDOR_METHODS = {
         "akshare": get_akshare_insider_transactions,
         "alpha_vantage": get_alpha_vantage_insider_transactions,
         "yfinance": get_yfinance_insider_transactions,
+    },
+    "get_fund_flow": {
+        "akshare": get_fund_flow_akshare,
+        "alpha_vantage": _no_data("get_fund_flow", "alpha_vantage"),
+        "yfinance": _no_data("get_fund_flow", "yfinance"),
+    },
+    "get_lhb_detail": {
+        "akshare": get_lhb_detail_akshare,
+        "alpha_vantage": _no_data("get_lhb_detail", "alpha_vantage"),
+        "yfinance": _no_data("get_lhb_detail", "yfinance"),
+    },
+    "get_institute_hold": {
+        "akshare": get_institute_hold_akshare,
+        "alpha_vantage": _no_data("get_institute_hold", "alpha_vantage"),
+        "yfinance": _no_data("get_institute_hold", "yfinance"),
     },
 }
 

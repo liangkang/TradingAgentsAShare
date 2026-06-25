@@ -141,7 +141,7 @@ def fetch_reddit_posts(
     ticker: str,
     subreddits: Iterable[str] = DEFAULT_SUBREDDITS,
     limit_per_sub: int = 5,
-    timeout: float = 10.0,
+    timeout: float = 5.0,
     inter_request_delay: float = 0.4,
 ) -> str:
     """Fetch recent Reddit posts mentioning ``ticker`` across finance

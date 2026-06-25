@@ -41,6 +41,11 @@ from tradingagents.agents.utils.agent_utils import (
     get_insider_transactions,
     get_global_news
 )
+from tradingagents.agents.utils.extended_tools import (
+    get_fund_flow,
+    get_lhb_detail,
+    get_institute_hold,
+)
 
 from .checkpointer import checkpoint_step, clear_checkpoint, get_checkpointer, thread_id
 from .conditional_logic import ConditionalLogic
@@ -226,33 +231,31 @@ class TradingAgentsGraph:
         return {
             "market": ToolNode(
                 [
-                    # Core stock data tools
                     get_stock_data,
-                    # Technical indicators
                     get_indicators,
+                    get_fund_flow,
                 ]
             ),
             "social": ToolNode(
                 [
-                    # News tools for social media analysis
                     get_news,
                 ]
             ),
             "news": ToolNode(
                 [
-                    # News and insider information
                     get_news,
                     get_global_news,
                     get_insider_transactions,
+                    get_lhb_detail,
                 ]
             ),
             "fundamentals": ToolNode(
                 [
-                    # Fundamental analysis tools
                     get_fundamentals,
                     get_balance_sheet,
                     get_cashflow,
                     get_income_statement,
+                    get_institute_hold,
                 ]
             ),
         }

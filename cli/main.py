@@ -1305,5 +1305,52 @@ def analyze(
     run_analysis(checkpoint=checkpoint)
 
 
+@app.command()
+def web(
+    host: str = typer.Option(
+        "127.0.0.1",
+        "--host",
+        help="Host to bind the web server to.",
+    ),
+    port: int = typer.Option(
+        8000,
+        "--port",
+        help="Port to bind the web server to.",
+    ),
+):
+    """Launch the TradingAgents web interface.
+
+    Opens a browser-based UI that mirrors the CLI workflow:
+    configuration form → real-time dashboard → final report.
+
+    API keys are read from your .env file (same as the CLI mode).
+    Only accessible from localhost by default — single-user local use.
+    """
+    try:
+        import uvicorn
+        from web.app import app as web_app
+    except ImportError as e:
+        console.print(
+            f"[red]Missing dependency: {e}[/red]\n"
+            f"[dim]Install with: pip install fastapi uvicorn[/dim]"
+        )
+        raise typer.Exit(code=1)
+
+    console.print()
+    console.print(
+        Panel(
+            "[bold green]TradingAgents Web 界面[/bold green]\n\n"
+            f"[bold]服务器启动地址：[/bold] [cyan]http://{host}:{port}[/cyan]\n\n"
+            "[dim]在浏览器中打开上述地址即可使用。[/dim]\n"
+            "[dim]按 Ctrl+C 停止服务器。[/dim]",
+            border_style="green",
+            padding=(1, 2),
+            title="Web 模式",
+        )
+    )
+    console.print()
+    uvicorn.run(web_app, host=host, port=port, log_level="info")
+
+
 if __name__ == "__main__":
     app()
