@@ -165,7 +165,7 @@ class TradingAgentsGraph:
             if reasoning_effort:
                 kwargs["reasoning_effort"] = reasoning_effort
 
-        elif provider == "anthropic":
+        elif provider in ("anthropic", "evolink"):
             effort = self.config.get("anthropic_effort")
             if effort:
                 kwargs["effort"] = effort

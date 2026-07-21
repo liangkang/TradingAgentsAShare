@@ -11,6 +11,7 @@ Usage:
     OPENAI_API_KEY=... python scripts/smoke_structured_output.py openai
     GOOGLE_API_KEY=... python scripts/smoke_structured_output.py google
     ANTHROPIC_API_KEY=... python scripts/smoke_structured_output.py anthropic
+    EVOLINK_API_KEY=... python scripts/smoke_structured_output.py evolink
     DEEPSEEK_API_KEY=... python scripts/smoke_structured_output.py deepseek
 
 The script does NOT call propagate(), to keep the surface tight and the
@@ -35,6 +36,7 @@ PROVIDER_DEFAULTS = {
     "anthropic": ("claude-sonnet-4-6", None),
     "deepseek": ("deepseek-v4-flash", None),
     "qwen": ("qwen3.7-plus", None),
+    "evolink": ("claude-sonnet-4-6", None),
     "glm": ("glm-5", None),
     "xai": ("grok-4.3", None),
 }
