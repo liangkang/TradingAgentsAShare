@@ -55,7 +55,7 @@ def test_load_ohlcv_requests_inclusive_end(monkeypatch, tmp_path):
 
     monkeypatch.setattr(su.yf, "download", fake_download)
     today = pd.Timestamp.today().strftime("%Y-%m-%d")
-    su.load_ohlcv("AAPL", today)
+    su.load_ohlcv("AAPL", today, vendor="yfinance")
 
     expected_end = (pd.Timestamp.today() + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
     assert captured["end"] == expected_end  # tomorrow -> today's row included (#986)

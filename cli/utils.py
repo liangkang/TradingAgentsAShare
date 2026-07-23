@@ -8,10 +8,11 @@ from rich.console import Console
 from cli.models import AnalystType, AssetType
 from tradingagents.llm_clients.api_key_env import get_api_key_env
 from tradingagents.llm_clients.model_catalog import get_model_options
+from tradingagents.llm_clients.provider_catalog import get_provider_options
 
 console = Console()
 
-TICKER_INPUT_EXAMPLES = "SPY, 0700.HK, BTC-USD"
+TICKER_INPUT_EXAMPLES = "SPY, 0700.HK, BTC-USD, 长飞光纤"
 
 ANALYST_ORDER = [
     ("Market Analyst", AnalystType.MARKET),
@@ -31,6 +32,13 @@ def is_valid_ticker_input(value: str) -> bool:
     allowed (it defaults to SPY downstream).
     """
     v = value.strip()
+    if any("\u3400" <= ch <= "\u9fff" or "\uf900" <= ch <= "\ufaff" for ch in v):
+        # Official A-share short names may contain ASCII letters, an asterisk
+        # (e.g. *ST), or typography-only whitespace. The name is resolved to a
+        # safe canonical code before it is ever used in a path or vendor call.
+        return len(v) <= 32 and all(
+            ch.isalnum() or ch.isspace() or ch == "*" for ch in v
+        )
     return not v or (all(ch.isalnum() or ch in "._-^=" for ch in v) and len(v) <= 32)
 
 
@@ -59,7 +67,13 @@ def get_ticker() -> str:
         console.print("\n[red]No ticker symbol provided. Exiting...[/red]")
         exit(1)
 
-    return normalize_ticker_symbol(ticker) if ticker.strip() else "SPY"
+    if not ticker.strip():
+        return "SPY"
+    try:
+        return normalize_ticker_symbol(ticker)
+    except ValueError as exc:
+        console.print(f"\n[red]Invalid ticker: {exc}[/red]")
+        raise SystemExit(2) from None
 
 
 def normalize_ticker_symbol(ticker: str) -> str:
@@ -71,9 +85,17 @@ def normalize_ticker_symbol(ticker: str) -> str:
     plain upper-case if the data layer is unavailable.
     """
     try:
-        from tradingagents.dataflows.symbol_utils import normalize_symbol
+        from tradingagents.dataflows.symbol_utils import (
+            contains_chinese,
+            normalize_symbol,
+            resolve_a_share_name,
+        )
 
+        if contains_chinese(ticker):
+            ticker = resolve_a_share_name(ticker)
         return normalize_symbol(ticker)
+    except ValueError:
+        raise
     except Exception:
         return ticker.strip().upper()
 
@@ -344,26 +366,9 @@ def _llm_provider_table() -> list[tuple[str, str, str | None]]:
     (convention from the broader Ollama ecosystem); falls back to the
     localhost default when unset.
     """
-    ollama_url = os.environ.get("OLLAMA_BASE_URL") or "http://localhost:11434/v1"
     return [
-        ("OpenAI", "openai", "https://api.openai.com/v1"),
-        ("Google", "google", None),
-        ("Anthropic", "anthropic", "https://api.anthropic.com/"),
-        ("Evolink (Claude API)", "evolink", "https://direct.evolink.ai"),
-        ("xAI", "xai", "https://api.x.ai/v1"),
-        ("DeepSeek", "deepseek", "https://api.deepseek.com"),
-        ("Qwen", "qwen", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"),
-        ("GLM", "glm", "https://open.bigmodel.cn/api/paas/v4/"),
-        ("MiniMax", "minimax", "https://api.minimax.io/v1"),
-        ("OpenRouter", "openrouter", "https://openrouter.ai/api/v1"),
-        ("Mistral", "mistral", "https://api.mistral.ai/v1"),
-        ("Kimi (Moonshot)", "kimi", "https://api.moonshot.ai/v1"),
-        ("Groq", "groq", "https://api.groq.com/openai/v1"),
-        ("NVIDIA NIM", "nvidia", "https://integrate.api.nvidia.com/v1"),
-        ("Azure OpenAI", "azure", None),
-        ("Amazon Bedrock", "bedrock", None),
-        ("Ollama", "ollama", ollama_url),
-        ("OpenAI-compatible (vLLM, LM Studio, llama.cpp, custom relay)", "openai_compatible", None),
+        (option.display, option.key, option.default_url)
+        for option in get_provider_options()
     ]
 
 

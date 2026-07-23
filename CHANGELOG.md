@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
 
+## [fork] — 2026-07-23
+
+### Changed
+
+- **akshare** is now the default data vendor, replacing yfinance as the primary source
+- Multi-source architecture: Sina Finance (OHLCV), East Money (financial statements),
+  Caixin/CCTV (macro news), with automatic yfinance fallback
+
 ## [0.3.1] — 2026-07-05
 
 Correctness and stability patch: data look-ahead, graph-router crash-safety,

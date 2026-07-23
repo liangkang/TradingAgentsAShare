@@ -35,14 +35,18 @@ class TestLoadOhlcvNoPoison(unittest.TestCase):
         empty = pd.DataFrame()
         with mock.patch.object(stockstats_utils.yf, "download", return_value=empty), \
                 self.assertRaises(NoMarketDataError):
-            stockstats_utils.load_ohlcv("FAKE", "2026-01-01")
+            stockstats_utils.load_ohlcv(
+                "FAKE", "2026-01-01", vendor="yfinance"
+            )
         # Nothing should have been written to the cache.
         self.assertEqual(os.listdir(self._tmp), [])
 
         # A second call must re-attempt the fetch (no poisoned cache served).
         with mock.patch.object(stockstats_utils.yf, "download", return_value=empty) as dl2:
             with self.assertRaises(NoMarketDataError):
-                stockstats_utils.load_ohlcv("FAKE", "2026-01-01")
+                stockstats_utils.load_ohlcv(
+                    "FAKE", "2026-01-01", vendor="yfinance"
+                )
             self.assertTrue(dl2.called)
 
 

@@ -43,6 +43,7 @@ __all__ = [
     "resolve_instrument_identity",
     "get_instrument_context_from_state",
     "get_language_instruction",
+    "is_cn_ticker",
     "create_msg_delete",
 ]
 
@@ -65,6 +66,21 @@ def get_language_instruction() -> str:
     return f" Write your entire response in {lang}."
 
 
+def is_cn_ticker(ticker: str) -> bool:
+    """Return True for tickers that are China A-share listed.
+
+    Recognizes both domestic conventions (.SH, .SZ) and the Yahoo Finance
+    convention (.SS). This is the single source of truth for analysts and
+    other consumers that need to branch behavior for China A-shares.
+    """
+    ticker_upper = ticker.upper()
+    return (
+        ticker_upper.endswith(".SH")
+        or ticker_upper.endswith(".SZ")
+        or ticker_upper.endswith(".SS")
+    )
+
+
 def _clean_identity_value(value: Any) -> str | None:
     """Return a trimmed string, or None for empty / placeholder-ish values."""
     if not isinstance(value, str):
@@ -75,32 +91,14 @@ def _clean_identity_value(value: Any) -> str | None:
     return cleaned
 
 
-@functools.lru_cache(maxsize=256)
-def resolve_instrument_identity(ticker: str) -> dict:
-    """Resolve deterministic identity metadata (company name, sector, …) for a ticker.
-
-    This exists to stop the pipeline from hallucinating a *different* company
-    when a chart pattern suggests a different industry than the real one
-    (#814): without a ground-truth name, the market analyst would pattern-match
-    the price action to a narrative and invent an identity that then cascaded
-    through every downstream agent.
-
-    Best-effort by design: if yfinance is unavailable, rate-limited, or doesn't
-    recognise the ticker, we return ``{}`` and the caller falls back to
-    ticker-only context rather than failing before analysis starts. Cached so
-    the lookup happens at most once per ticker per process.
-
-    The symbol is normalized first (e.g. ``XAUUSD`` -> ``GC=F``) so identity
-    resolves for the same instrument the price path actually fetches (#983).
-    """
+def _resolve_yfinance_identity(ticker: str) -> dict[str, str]:
     from tradingagents.dataflows.symbol_utils import normalize_symbol
 
     try:
         info = yf.Ticker(normalize_symbol(ticker)).info or {}
     except Exception as exc:  # noqa: BLE001 — fail open, never block the run
-        logger.debug("Could not resolve instrument identity for %s: %s", ticker, exc)
+        logger.debug("yfinance identity unavailable for %s: %s", ticker, exc)
         return {}
-
     identity: dict[str, str] = {}
     company_name = _clean_identity_value(info.get("longName")) or _clean_identity_value(
         info.get("shortName")
@@ -116,6 +114,86 @@ def resolve_instrument_identity(ticker: str) -> dict:
         value = _clean_identity_value(info.get(source_key))
         if value:
             identity[target_key] = value
+    return identity
+
+
+def _resolve_akshare_identity(ticker: str) -> dict[str, str]:
+    upper = ticker.upper()
+    identity: dict[str, str] = {}
+    try:
+        import akshare as ak
+
+        if upper.endswith((".SS", ".SZ")):
+            bare_code = upper[:-3]
+            is_shanghai = upper.endswith(".SS")
+            identity["exchange"] = (
+                "Shanghai Stock Exchange"
+                if is_shanghai
+                else "Shenzhen Stock Exchange"
+            )
+            identity["quote_type"] = "EQUITY"
+            try:
+                name_df = ak.stock_info_a_code_name()
+                row = name_df[name_df["code"] == bare_code]
+                if not row.empty:
+                    cn_name = _clean_identity_value(row.iloc[0].get("name"))
+                    if cn_name:
+                        identity["company_name"] = cn_name
+            except Exception:
+                pass
+            try:
+                prefix = "SH" if is_shanghai else "SZ"
+                df = ak.stock_profile_cninfo(symbol=prefix + bare_code)
+                if df is not None and not df.empty:
+                    industry = _clean_identity_value(df.iloc[0].get("所属行业"))
+                    if industry:
+                        identity["industry"] = industry
+            except Exception:
+                pass
+        elif upper.endswith(".HK"):
+            code = upper[:-3].lstrip("0").zfill(5)
+            df = ak.stock_hk_company_profile_em(symbol=code)
+            if df is not None and not df.empty:
+                row = df.iloc[0]
+                cn_name = _clean_identity_value(row.get("公司名称"))
+                if cn_name:
+                    identity["company_name"] = cn_name
+                industry = _clean_identity_value(row.get("所属行业"))
+                if industry:
+                    identity["industry"] = industry
+                identity["exchange"] = "Hong Kong Stock Exchange"
+                identity["quote_type"] = "EQUITY"
+    except Exception as exc:
+        logger.debug("akshare identity lookup failed for %s: %s", ticker, exc)
+    return identity
+
+
+@functools.lru_cache(maxsize=256)
+def resolve_instrument_identity(ticker: str) -> dict:
+    """Resolve deterministic identity metadata (company name, sector, …).
+
+    AkShare is tried first for A-share and Hong Kong symbols so those runs do
+    not block on Yahoo before reaching the source with better local coverage.
+    Other markets retain yfinance-first behavior. Failures are best-effort and
+    fall back to ticker-only context rather than aborting the analysis.
+    """
+    upper = ticker.upper()
+    is_akshare_market = upper.endswith((".SS", ".SZ", ".HK"))
+    resolvers = (
+        (_resolve_akshare_identity, _resolve_yfinance_identity)
+        if is_akshare_market
+        else (_resolve_yfinance_identity, _resolve_akshare_identity)
+    )
+    identity: dict[str, str] = {}
+    for resolver in resolvers:
+        resolved = resolver(ticker)
+        # The company/name anchor is the important success condition. AkShare
+        # can still return only a statically inferred exchange when its lookup
+        # fails; in that case continue to yfinance instead of treating the
+        # partial metadata as a complete identity.
+        identity = {**resolved, **identity}
+        if identity.get("company_name"):
+            return identity
     return identity
 
 
@@ -212,6 +290,3 @@ def create_msg_delete():
         return {"messages": removal_operations + [placeholder]}
 
     return delete_messages
-
-
-

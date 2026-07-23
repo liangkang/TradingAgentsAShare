@@ -119,11 +119,11 @@ DEFAULT_CONFIG = _apply_env_overrides({
     # Search queries used by get_global_news for macro headlines. Extend or
     # replace to broaden geographic / sector coverage.
     "global_news_queries": [
-        "Federal Reserve interest rates inflation",
-        "S&P 500 earnings GDP economic outlook",
-        "geopolitical risk trade war sanctions",
-        "ECB Bank of England BOJ central bank policy",
-        "oil commodities supply chain energy",
+        "China central bank monetary policy PBOC RRR interest rate",
+        "China GDP economic growth trade export PMI",
+        "geopolitical risk trade war sanctions supply chain",
+        "oil commodities energy prices inflation",
+        "A-share market regulation policy reform",
     ],
     # Data vendor configuration
     # Category-level configuration (default for all tools in category).
@@ -131,10 +131,10 @@ DEFAULT_CONFIG = _apply_env_overrides({
     # routed to vendors you didn't choose. For ordered fallback, list several,
     # e.g. "yfinance,alpha_vantage". "default" uses all available vendors.
     "data_vendors": {
-        "core_stock_apis": "yfinance",       # Options: alpha_vantage, yfinance
-        "technical_indicators": "yfinance",  # Options: alpha_vantage, yfinance
-        "fundamental_data": "yfinance",      # Options: alpha_vantage, yfinance
-        "news_data": "yfinance",             # Options: alpha_vantage, yfinance
+        "core_stock_apis": "akshare,yfinance",       # akshare primary, yfinance fallback
+        "technical_indicators": "akshare,yfinance",  # akshare primary, yfinance fallback
+        "fundamental_data": "akshare,yfinance",      # akshare primary, yfinance fallback
+        "news_data": "akshare,yfinance",             # akshare primary, yfinance fallback
         "macro_data": "fred",                # Options: fred (needs FRED_API_KEY)
         "prediction_markets": "polymarket",  # Options: polymarket (keyless)
     },

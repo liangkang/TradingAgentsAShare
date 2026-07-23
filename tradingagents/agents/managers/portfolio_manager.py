@@ -40,7 +40,9 @@ def create_portfolio_manager(llm):
             else ""
         )
 
-        prompt = f"""As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision.
+        prompt = f"""**Output style:** Lead with a clear, concise conclusion. State your rating and actionable decision upfront; keep the executive summary to 2–4 tight sentences and use the investment thesis only for the most decisive supporting evidence—no debate recap, repetition, or filler.
+
+As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision.
 
 {instrument_context}
 

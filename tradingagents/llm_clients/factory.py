@@ -1,3 +1,4 @@
+import os
 
 from .base_client import BaseLLMClient
 
@@ -33,6 +34,11 @@ def create_llm_client(
     # through the provider registry (single source of truth).
     if provider_lower == "anthropic":
         from .anthropic_client import AnthropicClient
+        return AnthropicClient(model, base_url, **kwargs)
+
+    if provider_lower == "evolink":
+        from .anthropic_client import AnthropicClient
+        kwargs.setdefault("api_key", os.environ.get("EVOLINK_API_KEY"))
         return AnthropicClient(model, base_url, **kwargs)
 
     if provider_lower == "google":

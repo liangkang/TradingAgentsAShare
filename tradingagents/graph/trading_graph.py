@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import yfinance as yf
 from langgraph.prebuilt import ToolNode
 
@@ -27,8 +28,13 @@ from tradingagents.agents.utils.agent_utils import (
     get_verified_market_snapshot,
     resolve_instrument_identity,
 )
+from tradingagents.agents.utils.extended_tools import (
+    get_fund_flow,
+    get_institute_hold,
+    get_lhb_detail,
+)
 from tradingagents.agents.utils.memory import TradingMemoryLog
-from tradingagents.dataflows.config import set_config
+from tradingagents.dataflows.config import config_context
 from tradingagents.dataflows.utils import safe_ticker_component
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.llm_clients import create_llm_client
@@ -62,6 +68,65 @@ def _coerce_max_retries(value):
     return n
 
 
+def _history(ticker: str, start_str: str, end_str: str) -> "pd.DataFrame":
+    """Fetch OHLCV history for *ticker*, trying yfinance then akshare.
+
+    Module-level function (not a class method) so it works correctly even
+    when called through mock objects in tests.
+    """
+    from tradingagents.dataflows.symbol_utils import normalize_symbol
+
+    canonical = normalize_symbol(ticker)
+    try:
+        hist = yf.Ticker(canonical).history(start=start_str, end=end_str)
+        if hist is not None and not hist.empty and "Close" in hist.columns:
+            return hist
+    except Exception:
+        pass
+
+    # Fall back to akshare
+    try:
+        import akshare as ak  # noqa: F811 (lazy import, seldom hit)
+
+        upper = ticker.upper()
+        if upper.endswith(".HK"):
+            code = upper[:-3].lstrip("0").zfill(5)
+            df = ak.stock_hk_daily(symbol=code, adjust="qfq")
+        elif upper.endswith(".SS") or upper.endswith(".SZ"):
+            code = ("SH" + upper[:-3]) if upper.endswith(".SS") else ("SZ" + upper[:-3])
+            lc = code.replace("SH", "sh").replace("SZ", "sz")
+            df = None
+            # Sina first, Tencent fallback
+            try:
+                df = ak.stock_zh_a_daily(symbol=lc, adjust="qfq")
+            except Exception:
+                try:
+                    df = ak.stock_zh_a_hist_tx(symbol=lc, adjust="qfq")
+                    if df is not None and not df.empty and "amount" in df.columns and "volume" not in df.columns:
+                        df = df.rename(columns={"amount": "volume"})
+                except Exception:
+                    pass
+        else:
+            # US ticker or bare symbol
+            df = ak.stock_us_daily(symbol=upper, adjust="qfq")
+
+        if df is not None and not df.empty:
+            df["date"] = pd.to_datetime(df["date"], errors="coerce")
+            df = df[
+                (df["date"] >= pd.to_datetime(start_str))
+                & (df["date"] <= pd.to_datetime(end_str))
+            ]
+            if not df.empty:
+                df = df.rename(columns={"date": "Date", "open": "Open", "high": "High",
+                                         "low": "Low", "close": "Close", "volume": "Volume"})
+                df = df.set_index("Date")
+                return df
+    except Exception:
+        pass
+
+    return pd.DataFrame()
+
+
 class TradingAgentsGraph:
     """Main class that orchestrates the trading agents framework."""
 
@@ -83,9 +148,6 @@ class TradingAgentsGraph:
         self.debug = debug
         self.config = config or DEFAULT_CONFIG
         self.callbacks = callbacks or []
-
-        # Update the interface's config
-        set_config(self.config)
 
         # Create necessary directories
         os.makedirs(self.config["data_cache_dir"], exist_ok=True)
@@ -190,39 +252,37 @@ class TradingAgentsGraph:
         return {
             "market": ToolNode(
                 [
-                    # Core stock data tools
                     get_stock_data,
-                    # Technical indicators
                     get_indicators,
                     # Deterministic verification snapshot (bound to the analyst
                     # LLM and required by its prompt; must be executable here or
                     # the call fails and the model reports it "unavailable").
                     get_verified_market_snapshot,
+                    get_fund_flow,
                 ]
             ),
             "social": ToolNode(
                 [
-                    # News tools for social media analysis
                     get_news,
                 ]
             ),
             "news": ToolNode(
                 [
-                    # News and insider information
                     get_news,
                     get_global_news,
                     get_insider_transactions,
                     get_macro_indicators,
                     get_prediction_markets,
+                    get_lhb_detail,
                 ]
             ),
             "fundamentals": ToolNode(
                 [
-                    # Fundamental analysis tools
                     get_fundamentals,
                     get_balance_sheet,
                     get_cashflow,
                     get_income_statement,
+                    get_institute_hold,
                 ]
             ),
         }
@@ -259,18 +319,14 @@ class TradingAgentsGraph:
         actual_holding_days)`` or ``(None, None, None)`` if price data is
         unavailable (too recent, delisted, or network error).
         """
-        from tradingagents.dataflows.symbol_utils import normalize_symbol
-
         try:
             start = datetime.strptime(trade_date, "%Y-%m-%d")
             end = start + timedelta(days=holding_days + 7)  # buffer for weekends/holidays
             end_str = end.strftime("%Y-%m-%d")
 
-            # Normalize so the realized-return lookup hits the same instrument
-            # the analysis priced (e.g. XAUUSD -> GC=F) (#984). The benchmark is
-            # already a canonical Yahoo symbol from ``_resolve_benchmark``.
-            stock = yf.Ticker(normalize_symbol(ticker)).history(start=trade_date, end=end_str)
-            bench = yf.Ticker(benchmark).history(start=trade_date, end=end_str)
+            # ``_history`` normalizes Yahoo symbols and falls back to akshare.
+            stock = _history(ticker, trade_date, end_str)
+            bench = _history(benchmark, trade_date, end_str)
 
             if len(stock) < 2 or len(bench) < 2:
                 return None, None, None
@@ -369,37 +425,38 @@ class TradingAgentsGraph:
         a per-ticker SqliteSaver so a crashed run can resume from the last
         successful node on a subsequent invocation with the same ticker+date.
         """
-        self.ticker = company_name
+        with config_context(self.config):
+            self.ticker = company_name
 
-        # Resolve any pending memory-log entries for this ticker before the pipeline runs.
-        self._resolve_pending_entries(company_name)
+            # Resolve any pending memory-log entries for this ticker before the pipeline runs.
+            self._resolve_pending_entries(company_name)
 
-        # Recompile with a checkpointer if the user opted in.
-        if self.config.get("checkpoint_enabled"):
-            self._checkpointer_ctx = get_checkpointer(
-                self.config["data_cache_dir"], company_name
-            )
-            saver = self._checkpointer_ctx.__enter__()
-            self.graph = self.workflow.compile(checkpointer=saver)
-
-            step = checkpoint_step(
-                self.config["data_cache_dir"], company_name, str(trade_date),
-                self._run_signature(asset_type),
-            )
-            if step is not None:
-                logger.info(
-                    "Resuming from step %d for %s on %s", step, company_name, trade_date
+            # Recompile with a checkpointer if the user opted in.
+            if self.config.get("checkpoint_enabled"):
+                self._checkpointer_ctx = get_checkpointer(
+                    self.config["data_cache_dir"], company_name
                 )
-            else:
-                logger.info("Starting fresh for %s on %s", company_name, trade_date)
+                saver = self._checkpointer_ctx.__enter__()
+                self.graph = self.workflow.compile(checkpointer=saver)
 
-        try:
-            return self._run_graph(company_name, trade_date, asset_type=asset_type)
-        finally:
-            if self._checkpointer_ctx is not None:
-                self._checkpointer_ctx.__exit__(None, None, None)
-                self._checkpointer_ctx = None
-                self.graph = self.workflow.compile()
+                step = checkpoint_step(
+                    self.config["data_cache_dir"], company_name, str(trade_date),
+                    self._run_signature(asset_type),
+                )
+                if step is not None:
+                    logger.info(
+                        "Resuming from step %d for %s on %s", step, company_name, trade_date
+                    )
+                else:
+                    logger.info("Starting fresh for %s on %s", company_name, trade_date)
+
+            try:
+                return self._run_graph(company_name, trade_date, asset_type=asset_type)
+            finally:
+                if self._checkpointer_ctx is not None:
+                    self._checkpointer_ctx.__exit__(None, None, None)
+                    self._checkpointer_ctx = None
+                    self.graph = self.workflow.compile()
 
     def save_reports(self, final_state, ticker, save_path=None) -> Path:
         """Write the markdown report tree for a completed run, like the CLI does.

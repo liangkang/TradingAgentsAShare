@@ -64,6 +64,45 @@ class ResolveInstrumentIdentityTests(unittest.TestCase):
         mock.assert_called_once()  # second call served from cache
         self.assertEqual(first, second)
 
+    def test_a_share_prefers_akshare_without_touching_yfinance(self):
+        with (
+            patch(
+                "tradingagents.agents.utils.agent_utils._resolve_akshare_identity",
+                return_value={"company_name": "贵州茅台"},
+            ) as akshare_lookup,
+            patch(
+                "tradingagents.agents.utils.agent_utils._resolve_yfinance_identity"
+            ) as yfinance_lookup,
+        ):
+            identity = resolve_instrument_identity("600519.SS")
+
+        self.assertEqual(identity["company_name"], "贵州茅台")
+        akshare_lookup.assert_called_once_with("600519.SS")
+        yfinance_lookup.assert_not_called()
+
+    def test_a_share_partial_akshare_identity_falls_back_to_yfinance(self):
+        with (
+            patch(
+                "tradingagents.agents.utils.agent_utils._resolve_akshare_identity",
+                return_value={
+                    "exchange": "Shanghai Stock Exchange",
+                    "quote_type": "EQUITY",
+                },
+            ),
+            patch(
+                "tradingagents.agents.utils.agent_utils._resolve_yfinance_identity",
+                return_value={
+                    "company_name": "Kweichow Moutai Co., Ltd.",
+                    "exchange": "SHH",
+                },
+            ) as yfinance_lookup,
+        ):
+            identity = resolve_instrument_identity("600519.SS")
+
+        yfinance_lookup.assert_called_once_with("600519.SS")
+        self.assertEqual(identity["company_name"], "Kweichow Moutai Co., Ltd.")
+        self.assertEqual(identity["exchange"], "Shanghai Stock Exchange")
+
 
 @pytest.mark.unit
 class BuildInstrumentContextTests(unittest.TestCase):

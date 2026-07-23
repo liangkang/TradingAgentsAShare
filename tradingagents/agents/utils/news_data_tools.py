@@ -23,11 +23,20 @@ def get_news(
     """
     return route_to_vendor("get_news", ticker, start_date, end_date)
 
+
 @tool
 def get_global_news(
     curr_date: Annotated[str, "Current date in yyyy-mm-dd format"],
-    look_back_days: Annotated[int | None, "Days to look back; omit to use the configured default"] = None,
-    limit: Annotated[int | None, "Max articles to return; omit to use the configured default"] = None,
+    look_back_days: Annotated[
+        int | None, "Days to look back; omit to use the configured default"
+    ] = None,
+    limit: Annotated[
+        int | None, "Max articles to return; omit to use the configured default"
+    ] = None,
+    ticker: Annotated[
+        str | None,
+        "Optional current ticker used only to select market-compatible news sources",
+    ] = None,
 ) -> str:
     """
     Retrieve global news data.
@@ -39,11 +48,22 @@ def get_global_news(
         curr_date (str): Current date in yyyy-mm-dd format
         look_back_days (int): Number of days to look back; omit to inherit config
         limit (int): Maximum number of articles to return; omit to inherit config
+        ticker (str): Optional ticker used for market-aware source selection.
 
     Returns:
         str: A formatted string containing global news data
     """
-    return route_to_vendor("get_global_news", curr_date, look_back_days, limit)
+    ticker_upper = ticker.strip().upper() if ticker else ""
+    is_a_share = ticker_upper.endswith((".SH", ".SS", ".SZ"))
+    excluded_vendors = {"akshare"} if ticker and not is_a_share else set()
+    return route_to_vendor(
+        "get_global_news",
+        curr_date,
+        look_back_days,
+        limit,
+        _exclude_vendors=excluded_vendors,
+    )
+
 
 @tool
 def get_insider_transactions(

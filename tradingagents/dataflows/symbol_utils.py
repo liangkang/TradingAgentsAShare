@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 
 # NoMarketDataError lives in the vendor-error taxonomy (errors.py); re-exported
 # here for the many call sites that import it alongside normalize_symbol.
@@ -78,6 +79,95 @@ _YAHOO_SAFE = re.compile(r"^[A-Za-z0-9._\-\^=]+$")
 # in any of these resolves to ``-USD`` (#982). Longest first so ``USDT``/``USDC``
 # match before the ``USD`` substring.
 _CRYPTO_QUOTES = ("USDT", "USDC", "USD")
+
+
+class AShareNameResolutionError(ValueError):
+    """Raised when a Chinese A-share name cannot be resolved unambiguously."""
+
+
+def contains_chinese(text: str) -> bool:
+    """Return whether *text* contains a CJK unified ideograph."""
+    if not isinstance(text, str):
+        return False
+    return any(
+        "\u3400" <= char <= "\u9fff" or "\uf900" <= char <= "\ufaff"
+        for char in text
+    )
+
+
+def _normalized_a_share_name(value: object) -> str:
+    """Normalize harmless typography differences in Chinese stock names."""
+    return "".join(unicodedata.normalize("NFKC", str(value)).split()).casefold()
+
+
+def _a_share_exchange_suffix(code: str) -> str:
+    """Return the conventional exchange suffix for a six-digit A-share code."""
+    if not re.fullmatch(r"\d{6}", code):
+        raise AShareNameResolutionError(
+            f"AKShare returned an invalid A-share code: {code!r}"
+        )
+    if code.startswith("6"):
+        return ".SH"
+    if code.startswith(("0", "3")):
+        return ".SZ"
+    if code.startswith(("4", "8", "9")):
+        return ".BJ"
+    raise AShareNameResolutionError(
+        f"cannot determine the A-share exchange for code {code}"
+    )
+
+
+def resolve_a_share_name(name: str) -> str:
+    """Resolve an exact Chinese A-share short name to ``CODE.EXCHANGE``.
+
+    AKShare's ``stock_info_a_code_name`` endpoint provides the current code and
+    short-name list for all Shanghai, Shenzhen, and Beijing A shares. Exact
+    matching is deliberate: silently picking a fuzzy result could make the
+    trading workflow analyze the wrong company.
+    """
+    query = _normalized_a_share_name(name)
+    if not query or not contains_chinese(name):
+        raise AShareNameResolutionError(
+            "A-share name lookup requires a Chinese stock name"
+        )
+
+    try:
+        import akshare as ak
+
+        names = ak.stock_info_a_code_name()
+    except Exception as exc:
+        raise AShareNameResolutionError(
+            f"could not load the A-share stock list from AKShare: {exc}"
+        ) from exc
+
+    if names is None or not {"code", "name"}.issubset(names.columns):
+        raise AShareNameResolutionError(
+            "AKShare returned an invalid A-share stock list"
+        )
+
+    matches: list[tuple[str, str]] = []
+    for code_value, name_value in names[["code", "name"]].itertuples(
+        index=False, name=None
+    ):
+        if _normalized_a_share_name(name_value) == query:
+            code = str(code_value).strip().zfill(6)
+            matches.append((code, str(name_value).strip()))
+
+    unique_codes = sorted({code for code, _ in matches})
+    if not unique_codes:
+        raise AShareNameResolutionError(
+            f"no exact A-share match found for Chinese stock name {name!r}"
+        )
+    if len(unique_codes) > 1:
+        candidates = ", ".join(unique_codes)
+        raise AShareNameResolutionError(
+            f"Chinese stock name {name!r} is ambiguous; matching codes: {candidates}"
+        )
+
+    code = unique_codes[0]
+    resolved = f"{code}{_a_share_exchange_suffix(code)}"
+    logger.info("Resolved Chinese A-share name %r to symbol %r", name, resolved)
+    return resolved
 
 
 def crypto_base(raw: str) -> str | None:

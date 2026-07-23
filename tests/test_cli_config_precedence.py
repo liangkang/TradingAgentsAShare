@@ -54,6 +54,19 @@ def test_partial_env_only_overrides_that_count(monkeypatch):
     assert cfg["max_risk_discuss_rounds"] == 5  # falls through to research_depth
 
 
+def test_explicit_non_interactive_depth_overrides_env(monkeypatch):
+    monkeypatch.setenv("TRADINGAGENTS_MAX_DEBATE_ROUNDS", "2")
+    monkeypatch.setenv("TRADINGAGENTS_MAX_RISK_ROUNDS", "4")
+    selections = {**SELECTIONS, "research_depth_explicit": True}
+    patched = dict(m.DEFAULT_CONFIG, max_debate_rounds=2, max_risk_discuss_rounds=4)
+
+    with mock.patch.object(m, "DEFAULT_CONFIG", patched):
+        cfg = m._build_run_config(selections, checkpoint=None)
+
+    assert cfg["max_debate_rounds"] == 5
+    assert cfg["max_risk_discuss_rounds"] == 5
+
+
 def test_checkpoint_none_preserves_env_default():
     patched = dict(m.DEFAULT_CONFIG, checkpoint_enabled=True)  # e.g. env-enabled
     with mock.patch.object(m, "DEFAULT_CONFIG", patched):

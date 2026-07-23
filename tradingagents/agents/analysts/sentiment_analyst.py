@@ -5,13 +5,11 @@ the old version had a prompt that demanded social-media analysis but the
 only tool available was Yahoo Finance news — which led LLMs to fabricate
 Reddit/X/StockTwits content under prompt pressure (verified live).
 
-The redesigned agent pre-fetches three complementary data sources before
-the LLM is invoked and injects them into the prompt as structured blocks:
-
-  1. News headlines     — Yahoo Finance (institutional framing)
-  2. StockTwits messages — retail-trader posts indexed by cashtag, with
-                           user-labeled Bullish/Bearish sentiment tags
-  3. Reddit posts        — r/wallstreetbets, r/stocks, r/investing
+The redesigned agent pre-fetches market-appropriate sources before the LLM is
+invoked and injects them into the prompt as structured blocks. US/default
+markets use Yahoo Finance news, StockTwits, and Reddit. China A-shares use
+AKShare-backed East Money/CNInfo news plus East Money popularity, Xueqiu
+discussion rank, Baidu bullish/bearish votes, and Weibo attention.
 
 The agent does not use tool-calling; the data is in the prompt from
 turn 0. Output uses the structured-output pattern (json_schema for
@@ -34,18 +32,25 @@ from tradingagents.agents.utils.agent_utils import (
     get_instrument_context_from_state,
     get_language_instruction,
     get_news,
+    is_cn_ticker,
 )
 from tradingagents.agents.utils.structured import (
     NO_EXTERNAL_TOOLS,
     bind_structured,
     invoke_structured_or_freetext,
 )
+from tradingagents.dataflows.china_social import fetch_china_social_sentiment
 from tradingagents.dataflows.reddit import fetch_reddit_posts
 from tradingagents.dataflows.stocktwits import fetch_stocktwits_messages
 
 
 def _seven_days_back(trade_date: str) -> str:
     return (datetime.strptime(trade_date, "%Y-%m-%d") - timedelta(days=7)).strftime("%Y-%m-%d")
+
+
+def _news_source_label(ticker: str) -> str:
+    """Return the human-readable news source for the ticker market."""
+    return "akshare (East Money) + CNInfo" if is_cn_ticker(ticker) else "Yahoo Finance"
 
 
 def create_sentiment_analyst(llm):
@@ -64,12 +69,28 @@ def create_sentiment_analyst(llm):
         start_date = _seven_days_back(end_date)
         instrument_context = get_instrument_context_from_state(state)
 
-        # Pre-fetch all three sources. Each fetcher degrades gracefully and
-        # returns a string (no exceptions surface from here), so the LLM
-        # always sees something — either real data or a clear placeholder.
+        # Pre-fetch the market-appropriate sources. Each fetcher degrades
+        # gracefully and returns a string, so the LLM always sees either real
+        # data or a clear unavailable marker.
+        #
+        # StockTwits and Reddit are US-centric platforms. For China A-share
+        # tickers they carry negligible signal and the network calls often time
+        # out from behind certain firewalls. Skip them and supply honest
+        # <unavailable> placeholders so the LLM can flag lower confidence rather
+        # than waiting for dead requests. The upstream default behavior keeps
+        # them enabled for all other markets.
+        is_cn = is_cn_ticker(ticker)
+
         news_block = get_news.func(ticker, start_date, end_date)
-        stocktwits_block = fetch_stocktwits_messages(ticker, limit=30)
-        reddit_block = fetch_reddit_posts(ticker)
+
+        if not is_cn:
+            china_social_block = None
+            stocktwits_block = fetch_stocktwits_messages(ticker, limit=30)
+            reddit_block = fetch_reddit_posts(ticker)
+        else:
+            china_social_block = fetch_china_social_sentiment(ticker, end_date)
+            stocktwits_block = ""
+            reddit_block = ""
 
         system_message = _build_system_message(
             ticker=ticker,
@@ -78,6 +99,7 @@ def create_sentiment_analyst(llm):
             news_block=news_block,
             stocktwits_block=stocktwits_block,
             reddit_block=reddit_block,
+            china_social_block=china_social_block,
         )
 
         prompt = ChatPromptTemplate.from_messages(
@@ -91,8 +113,7 @@ def create_sentiment_analyst(llm):
                     # prompt, so tool-range wording would only invite a
                     # hallucinated tool call (#1130).
                     " Today's date is {current_date}; treat it as 'now' for all analysis. {instrument_context}"
-                    " " + NO_EXTERNAL_TOOLS +
-                    "\n{system_message}",
+                    " " + NO_EXTERNAL_TOOLS + "\n{system_message}",
                 ),
                 MessagesPlaceholder(variable_name="messages"),
             ]
@@ -131,20 +152,56 @@ def _build_system_message(
     news_block: str,
     stocktwits_block: str,
     reddit_block: str,
+    china_social_block: str | None = None,
 ) -> str:
     """Assemble the sentiment-analyst system message with structured data blocks."""
-    return f"""You are a financial market sentiment analyst. Your task is to produce a comprehensive sentiment report for {ticker} covering the period from {start_date} to {end_date}, drawing on three complementary data sources that have already been collected for you.
+    is_cn = is_cn_ticker(ticker)
+    news_source = _news_source_label(ticker)
+    if is_cn:
+        data_sources_intro = (
+            "China-market news and social/attention signals. StockTwits and "
+            "Reddit are US-centric and are skipped for this China A-share ticker"
+        )
+        social_sections = f"""### China A-share social and attention signals
+Current-snapshot signals from East Money popularity, Xueqiu discussion,
+Baidu Finance bullish/bearish votes, and Weibo attention. Individual sources
+may be unavailable, especially for a historical analysis date.
 
-## Data sources (pre-fetched, in this prompt)
+<start_of_china_social>
+{china_social_block or "<unavailable — China social data was not collected>"}
+<end_of_china_social>"""
+        analysis_guidance = """1. **Separate attention from direction.** East Money,
+Xueqiu, and Weibo rankings show participation or popularity; a high rank is
+not evidence of bullishness. Treat Baidu's bullish/bearish vote as the explicit
+directional social signal.
 
-### News headlines — Yahoo Finance, past 7 days
-Institutional framing. Fact-driven, slower-moving signal.
+2. **Look for cross-source divergences.** Compare directional votes with
+company-news framing and with attention. High attention plus negative news is
+different from high attention plus positive news.
 
-<start_of_news>
-{news_block}
-<end_of_news>
+3. **Do not invent posts or opinions.** These ranking interfaces do not provide
+a representative corpus of user messages. Describe only the supplied ranks,
+votes, keywords, and news evidence.
 
-### StockTwits messages — retail-trader social platform indexed by cashtag
+4. **Respect point-in-time limits.** If the China social block says current
+snapshots were unavailable for a historical date, do not use present-day
+rankings as historical evidence and lower confidence accordingly.
+
+5. **Distinguish opinion from event.** Votes and popularity are audience
+signals; company announcements and news are events and should normally carry
+more evidentiary weight.
+
+6. **Be honest about data limits.** Flag every unavailable source and reduce
+confidence when directional vote data or timely news is missing.
+
+7. **Identify recurring narrative themes, catalysts, and risks** across news,
+hot keywords, votes, and attention without treating sentiment as a price call.
+
+8. **Past sentiment is not predictive.** Frame conclusions as one signal for
+the trader to weigh alongside fundamentals and technicals."""
+    else:
+        data_sources_intro = "three complementary data sources"
+        social_sections = f"""### StockTwits messages — retail-trader social platform indexed by cashtag
 Fast-moving signal. Each message carries a user-labeled sentiment tag (Bullish / Bearish / no-label) plus the message body.
 
 <start_of_stocktwits>
@@ -156,11 +213,8 @@ Community discussion. Engagement signal via upvote score and comment count. Subr
 
 <start_of_reddit>
 {reddit_block}
-<end_of_reddit>
-
-## How to analyze this data (best practices)
-
-1. **Read the StockTwits Bullish/Bearish ratio as a leading retail-sentiment signal.** A 70/30 bullish/bearish split is moderately bullish; ≥90/10 may indicate over-extension and contrarian risk; 50/50 is uncertainty. Sample size matters — base rates on the actual message count, not percentages alone.
+<end_of_reddit>"""
+        analysis_guidance = """1. **Read the StockTwits Bullish/Bearish ratio as a leading retail-sentiment signal.** A 70/30 bullish/bearish split is moderately bullish; ≥90/10 may indicate over-extension and contrarian risk; 50/50 is uncertainty. Sample size matters — base rates on the actual message count, not percentages alone.
 
 2. **Look for cross-source divergences.** If news framing is bearish but StockTwits is overwhelmingly bullish, that mismatch is itself a signal — it can mean retail is leaning into a thesis the news flow hasn't caught up to (or vice versa, that retail is chasing while institutions are cautious).
 
@@ -174,7 +228,24 @@ Community discussion. Engagement signal via upvote score and comment count. Subr
 
 7. **Identify catalysts and risks** that emerge across sources — news of upcoming earnings, product launches, competitive threats, macro headlines, etc.
 
-8. **Past sentiment is not predictive.** Frame your conclusions as signal for the trader to weigh alongside fundamentals and technicals, not as a price call.
+8. **Past sentiment is not predictive.** Frame your conclusions as signal for the trader to weigh alongside fundamentals and technicals, not as a price call."""
+
+    return f"""You are a financial market sentiment analyst. Your task is to produce a comprehensive sentiment report for {ticker} covering the period from {start_date} to {end_date}, drawing on {data_sources_intro} that have already been collected for you.
+
+## Data sources (pre-fetched, in this prompt)
+
+### News headlines — {news_source}, past 7 days
+Institutional framing. Fact-driven, slower-moving signal.
+
+   <start_of_news>
+{news_block}
+<end_of_news>
+
+{social_sections}
+
+## How to analyze this data (best practices)
+
+{analysis_guidance}
 
 ## Output fields
 
@@ -201,6 +272,7 @@ def create_social_media_analyst(llm):
         Import :func:`create_sentiment_analyst` directly instead.
     """
     import warnings
+
     warnings.warn(
         "create_social_media_analyst is deprecated and will be removed in a "
         "future version. Use create_sentiment_analyst instead.",

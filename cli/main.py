@@ -49,10 +49,15 @@ from tradingagents.graph.analyst_execution import (
     AnalystWallTimeTracker,
     build_analyst_execution_plan,
     get_initial_analyst_node,
-    sync_analyst_tracker_from_chunk,
 )
-from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.reporting import write_report_tree
+from tradingagents.runtime import (
+    AnalysisEventProjector,
+    AnalysisRunner,
+    AnalysisSpec,
+    build_run_config,
+    build_run_config_values,
+)
 
 console = Console()
 
@@ -829,144 +834,6 @@ def display_complete_report(final_state):
             console.print(Panel(Markdown(risk["judge_decision"]), title="Portfolio Manager", border_style="blue", padding=(1, 2)))
 
 
-def update_research_team_status(status):
-    """Update status for research team members (not Trader)."""
-    research_team = ["Bull Researcher", "Bear Researcher", "Research Manager"]
-    for agent in research_team:
-        message_buffer.update_agent_status(agent, status)
-
-
-# Ordered list of analysts for status transitions
-ANALYST_ORDER = ["market", "social", "news", "fundamentals"]
-ANALYST_AGENT_NAMES = {
-    "market": "Market Analyst",
-    "social": "Sentiment Analyst",
-    "news": "News Analyst",
-    "fundamentals": "Fundamentals Analyst",
-}
-ANALYST_REPORT_MAP = {
-    "market": "market_report",
-    "social": "sentiment_report",
-    "news": "news_report",
-    "fundamentals": "fundamentals_report",
-}
-
-
-def update_analyst_statuses(message_buffer, chunk, wall_time_tracker=None):
-    """Update analyst statuses based on accumulated report state.
-
-    Logic:
-    - Store new report content from the current chunk if present
-    - Check accumulated report_sections (not just current chunk) for status
-    - Analysts with reports = completed
-    - First analyst without report = in_progress
-    - Remaining analysts without reports = pending
-    - When all analysts done, set Bull Researcher to in_progress
-    """
-    selected = message_buffer.selected_analysts
-    found_active = False
-
-    if wall_time_tracker is not None:
-        sync_analyst_tracker_from_chunk(wall_time_tracker, chunk)
-
-    for analyst_key in ANALYST_ORDER:
-        if analyst_key not in selected:
-            continue
-
-        agent_name = ANALYST_AGENT_NAMES[analyst_key]
-        report_key = ANALYST_REPORT_MAP[analyst_key]
-
-        # Capture new report content from current chunk
-        if chunk.get(report_key):
-            message_buffer.update_report_section(report_key, chunk[report_key])
-
-        # Determine status from accumulated sections, not just current chunk
-        has_report = bool(message_buffer.report_sections.get(report_key))
-
-        if has_report:
-            message_buffer.update_agent_status(agent_name, "completed")
-        elif not found_active:
-            message_buffer.update_agent_status(agent_name, "in_progress")
-            found_active = True
-        else:
-            message_buffer.update_agent_status(agent_name, "pending")
-
-    # When all analysts complete, transition research team to in_progress
-    if (
-        not found_active
-        and selected
-        and message_buffer.agent_status.get("Bull Researcher") == "pending"
-    ):
-        message_buffer.update_agent_status("Bull Researcher", "in_progress")
-
-def extract_content_string(content):
-    """Extract string content from various message formats.
-    Returns None if no meaningful text content is found.
-    """
-    import ast
-
-    def is_empty(val):
-        """Check if value is empty using Python's truthiness."""
-        if val is None or val == '':
-            return True
-        if isinstance(val, str):
-            s = val.strip()
-            if not s:
-                return True
-            try:
-                return not bool(ast.literal_eval(s))
-            except (ValueError, SyntaxError):
-                return False  # Can't parse = real text
-        return not bool(val)
-
-    if is_empty(content):
-        return None
-
-    if isinstance(content, str):
-        return content.strip()
-
-    if isinstance(content, dict):
-        text = content.get('text', '')
-        return text.strip() if not is_empty(text) else None
-
-    if isinstance(content, list):
-        text_parts = [
-            item.get('text', '').strip() if isinstance(item, dict) and item.get('type') == 'text'
-            else (item.strip() if isinstance(item, str) else '')
-            for item in content
-        ]
-        result = ' '.join(t for t in text_parts if t and not is_empty(t))
-        return result if result else None
-
-    return str(content).strip() if not is_empty(content) else None
-
-
-def classify_message_type(message) -> tuple[str, str | None]:
-    """Classify LangChain message into display type and extract content.
-
-    Returns:
-        (type, content) - type is one of: User, Agent, Data, Control
-                        - content is extracted string or None
-    """
-    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-
-    content = extract_content_string(getattr(message, 'content', None))
-
-    if isinstance(message, HumanMessage):
-        if content and content.strip() == "Continue":
-            return ("Control", content)
-        return ("User", content)
-
-    if isinstance(message, ToolMessage):
-        return ("Data", content)
-
-    if isinstance(message, AIMessage):
-        return ("Agent", content)
-
-    # Fallback for unknown types
-    return ("System", content)
-
-
 def format_tool_args(args, max_length=80) -> str:
     """Format tool arguments for terminal display."""
     result = str(args)
@@ -977,31 +844,24 @@ def format_tool_args(args, max_length=80) -> str:
 def _build_run_config(selections: dict, checkpoint: bool | None) -> dict:
     """Assemble the run config from interactive selections, honoring env precedence.
 
-    Round counts and checkpoint follow "explicit env/flag wins": an env-applied
-    value on DEFAULT_CONFIG is preserved unless the user overrode it on the CLI.
+    Interactive selections retain the historical environment-variable
+    precedence. An explicit non-interactive ``--research-depth`` is a CLI flag
+    and therefore overrides the environment for that run.
     """
-    config = DEFAULT_CONFIG.copy()
-    # Research depth sets both round counts, but an explicit env override
-    # (TRADINGAGENTS_MAX_DEBATE_ROUNDS / _MAX_RISK_ROUNDS) wins over the
-    # interactive selection — leave the env-applied value in place (#977).
-    if not os.environ.get("TRADINGAGENTS_MAX_DEBATE_ROUNDS"):
-        config["max_debate_rounds"] = selections["research_depth"]
-    if not os.environ.get("TRADINGAGENTS_MAX_RISK_ROUNDS"):
-        config["max_risk_discuss_rounds"] = selections["research_depth"]
-    config["quick_think_llm"] = selections["shallow_thinker"]
-    config["deep_think_llm"] = selections["deep_thinker"]
-    config["backend_url"] = selections["backend_url"]
-    config["llm_provider"] = selections["llm_provider"].lower()
-    # Provider-specific thinking configuration
-    config["google_thinking_level"] = selections.get("google_thinking_level")
-    config["openai_reasoning_effort"] = selections.get("openai_reasoning_effort")
-    config["anthropic_effort"] = selections.get("anthropic_effort")
-    config["output_language"] = selections.get("output_language", "English")
-    # --checkpoint/--no-checkpoint overrides only when explicitly given; omitting
-    # the flag preserves TRADINGAGENTS_CHECKPOINT_ENABLED / the default (#976).
-    if checkpoint is not None:
-        config["checkpoint_enabled"] = checkpoint
-    return config
+    return build_run_config_values(
+        research_depth=selections["research_depth"],
+        quick_think_llm=selections["shallow_thinker"],
+        deep_think_llm=selections["deep_thinker"],
+        backend_url=selections["backend_url"],
+        llm_provider=selections["llm_provider"].lower(),
+        google_thinking_level=selections.get("google_thinking_level"),
+        openai_reasoning_effort=selections.get("openai_reasoning_effort"),
+        anthropic_effort=selections.get("anthropic_effort"),
+        output_language=selections.get("output_language", "English"),
+        checkpoint=checkpoint,
+        preserve_env_rounds=not selections.get("research_depth_explicit", False),
+        base_config=DEFAULT_CONFIG,
+    )
 
 
 def run_analysis(
@@ -1013,23 +873,44 @@ def run_analysis(
     if selections is None:
         selections = get_user_selections()
 
-    config = _build_run_config(selections, checkpoint)
+    spec = AnalysisSpec.create(
+        ticker=selections["ticker"],
+        analysis_date=selections["analysis_date"],
+        analysts=[analyst.value for analyst in selections["analysts"]],
+        research_depth=selections["research_depth"],
+        llm_provider=selections["llm_provider"],
+        quick_think_llm=selections["shallow_thinker"],
+        deep_think_llm=selections["deep_thinker"],
+        output_language=selections.get("output_language", "English"),
+        asset_type=selections["asset_type"],
+        backend_url=selections["backend_url"],
+        google_thinking_level=selections.get("google_thinking_level"),
+        openai_reasoning_effort=selections.get("openai_reasoning_effort"),
+        anthropic_effort=selections.get("anthropic_effort"),
+    )
+    config = build_run_config(
+        spec,
+        checkpoint=checkpoint,
+        preserve_env_rounds=not selections.get("research_depth_explicit", False),
+        base_config=DEFAULT_CONFIG,
+    )
 
     # Create stats callback handler for tracking LLM/tool calls
     stats_handler = StatsCallbackHandler()
 
     # Normalize analyst selection to predefined order (selection is a 'set', order is fixed)
-    selected_set = {analyst.value for analyst in selections["analysts"]}
-    selected_analyst_keys = [a for a in ANALYST_ORDER if a in selected_set]
+    selected_analyst_keys = list(spec.analysts)
     analyst_execution_plan = build_analyst_execution_plan(selected_analyst_keys)
     analyst_wall_time_tracker = AnalystWallTimeTracker(analyst_execution_plan)
 
-    # Initialize the graph with callbacks bound to LLMs
-    graph = TradingAgentsGraph(
-        selected_analyst_keys,
-        config=config,
-        debug=True,
+    runner = AnalysisRunner(
+        spec,
+        config,
         callbacks=[stats_handler],
+    )
+    event_projector = AnalysisEventProjector(
+        spec.analysts,
+        analyst_wall_time_tracker,
     )
 
     # Initialize message buffer with selected analysts
@@ -1118,132 +999,33 @@ def run_analysis(
         )
         update_display(layout, spinner_text, stats_handler=stats_handler, start_time=start_time)
 
-        # Initialize state and get graph args with callbacks.
-        # Resolve the instrument identity once here so all agents anchor to
-        # the real company (#814); the CLI builds state directly rather than
-        # going through propagate(), so this must happen on the CLI path too.
-        instrument_context = graph.resolve_instrument_context(
-            selections["ticker"], selections["asset_type"]
-        )
-        init_agent_state = graph.propagator.create_initial_state(
-            selections["ticker"],
-            selections["analysis_date"],
-            asset_type=selections["asset_type"],
-            instrument_context=instrument_context,
-        )
-        # Pass callbacks to graph config for tool execution tracking
-        # (LLM tracking is handled separately via LLM constructor)
-        args = graph.propagator.get_graph_args(callbacks=[stats_handler])
-
-        # Stream the analysis
-        trace = []
-        for chunk in graph.graph.stream(init_agent_state, **args):
-            # Process all messages in chunk, deduplicating by message ID
-            for message in chunk.get("messages", []):
-                msg_id = getattr(message, "id", None)
-                if msg_id is not None:
-                    if msg_id in message_buffer._processed_message_ids:
-                        continue
-                    message_buffer._processed_message_ids.add(msg_id)
-
-                msg_type, content = classify_message_type(message)
-                if content and content.strip():
-                    message_buffer.add_message(msg_type, content)
-
-                if hasattr(message, "tool_calls") and message.tool_calls:
-                    for tool_call in message.tool_calls:
-                        if isinstance(tool_call, dict):
-                            message_buffer.add_tool_call(tool_call["name"], tool_call["args"])
-                        else:
-                            message_buffer.add_tool_call(tool_call.name, tool_call.args)
-
-            # Update analyst statuses based on report state (runs on every chunk)
-            update_analyst_statuses(
-                message_buffer,
-                chunk,
-                wall_time_tracker=analyst_wall_time_tracker,
-            )
-
-            # Research Team - Handle Investment Debate State
-            if chunk.get("investment_debate_state"):
-                debate_state = chunk["investment_debate_state"]
-                bull_hist = debate_state.get("bull_history", "").strip()
-                bear_hist = debate_state.get("bear_history", "").strip()
-                judge = debate_state.get("judge_decision", "").strip()
-
-                # Only update status when there's actual content
-                if bull_hist or bear_hist:
-                    update_research_team_status("in_progress")
-                if bull_hist:
-                    message_buffer.update_report_section(
-                        "investment_plan", f"### Bull Researcher Analysis\n{bull_hist}"
+        for chunk in runner.stream():
+            for event in event_projector.process_chunk(chunk):
+                if event.event == "message":
+                    message_buffer.add_message(
+                        event.data["type"],
+                        event.data["content"],
                     )
-                if bear_hist:
-                    message_buffer.update_report_section(
-                        "investment_plan", f"### Bear Researcher Analysis\n{bear_hist}"
+                elif event.event == "tool_call":
+                    message_buffer.add_tool_call(
+                        event.data["name"],
+                        event.data["args"],
                     )
-                if judge:
-                    message_buffer.update_report_section(
-                        "investment_plan", f"### Research Manager Decision\n{judge}"
+                elif event.event == "agent_status":
+                    message_buffer.update_agent_status(
+                        event.data["agent"],
+                        event.data["status"],
                     )
-                    update_research_team_status("completed")
-                    message_buffer.update_agent_status("Trader", "in_progress")
-
-            # Trading Team
-            if chunk.get("trader_investment_plan"):
-                message_buffer.update_report_section(
-                    "trader_investment_plan", chunk["trader_investment_plan"]
-                )
-                if message_buffer.agent_status.get("Trader") != "completed":
-                    message_buffer.update_agent_status("Trader", "completed")
-                    message_buffer.update_agent_status("Aggressive Analyst", "in_progress")
-
-            # Risk Management Team - Handle Risk Debate State
-            if chunk.get("risk_debate_state"):
-                risk_state = chunk["risk_debate_state"]
-                agg_hist = risk_state.get("aggressive_history", "").strip()
-                con_hist = risk_state.get("conservative_history", "").strip()
-                neu_hist = risk_state.get("neutral_history", "").strip()
-                judge = risk_state.get("judge_decision", "").strip()
-
-                if agg_hist:
-                    if message_buffer.agent_status.get("Aggressive Analyst") != "completed":
-                        message_buffer.update_agent_status("Aggressive Analyst", "in_progress")
+                elif event.event == "report_update":
                     message_buffer.update_report_section(
-                        "final_trade_decision", f"### Aggressive Analyst Analysis\n{agg_hist}"
+                        event.data["section"],
+                        event.data["content"],
                     )
-                if con_hist:
-                    if message_buffer.agent_status.get("Conservative Analyst") != "completed":
-                        message_buffer.update_agent_status("Conservative Analyst", "in_progress")
-                    message_buffer.update_report_section(
-                        "final_trade_decision", f"### Conservative Analyst Analysis\n{con_hist}"
-                    )
-                if neu_hist:
-                    if message_buffer.agent_status.get("Neutral Analyst") != "completed":
-                        message_buffer.update_agent_status("Neutral Analyst", "in_progress")
-                    message_buffer.update_report_section(
-                        "final_trade_decision", f"### Neutral Analyst Analysis\n{neu_hist}"
-                    )
-                if judge and message_buffer.agent_status.get("Portfolio Manager") != "completed":
-                    message_buffer.update_agent_status("Portfolio Manager", "in_progress")
-                    message_buffer.update_report_section(
-                        "final_trade_decision", f"### Portfolio Manager Decision\n{judge}"
-                    )
-                    message_buffer.update_agent_status("Aggressive Analyst", "completed")
-                    message_buffer.update_agent_status("Conservative Analyst", "completed")
-                    message_buffer.update_agent_status("Neutral Analyst", "completed")
-                    message_buffer.update_agent_status("Portfolio Manager", "completed")
 
             # Update the display
             update_display(layout, stats_handler=stats_handler, start_time=start_time)
 
-            trace.append(chunk)
-
-        # Streamed chunks are per-node deltas, not full state. Merge them
-        # so every report field populated across the run is present.
-        final_state = {}
-        for chunk in trace:
-            final_state.update(chunk)
+        final_state = runner.final_state
 
         # Update all agent statuses to completed
         for agent in message_buffer.agent_status:
@@ -1298,6 +1080,7 @@ def _non_interactive_selections(
     provider: str | None,
     deep_model: str | None,
     quick_model: str | None,
+    research_depth: int | None,
     output_language: str,
 ) -> dict:
     """Validate CLI values and translate them to the existing run selections."""
@@ -1328,7 +1111,10 @@ def _non_interactive_selections(
     if parsed_date > datetime.datetime.now().date():
         raise typer.BadParameter("cannot be in the future", param_hint="--date")
 
-    ticker = normalize_ticker_symbol(ticker)
+    try:
+        ticker = normalize_ticker_symbol(ticker)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--ticker") from None
     asset_type = detect_asset_type(ticker)
     analyst_names = [value.strip().lower() for value in analysts.split(",") if value.strip()]
     valid_names = {item.value for item in AnalystType}
@@ -1351,7 +1137,12 @@ def _non_interactive_selections(
         "asset_type": asset_type.value,
         "analysis_date": analysis_date,
         "analysts": [AnalystType(value) for value in analyst_names],
-        "research_depth": DEFAULT_CONFIG["max_debate_rounds"],
+        "research_depth": (
+            research_depth
+            if research_depth is not None
+            else DEFAULT_CONFIG["max_debate_rounds"]
+        ),
+        "research_depth_explicit": research_depth is not None,
         "llm_provider": provider,
         "backend_url": resolve_backend_url(provider, env_url=DEFAULT_CONFIG["backend_url"]),
         "shallow_thinker": quick_model,
@@ -1367,12 +1158,25 @@ def _non_interactive_selections(
 def root(ctx: typer.Context):
     """Keep the historical bare `tradingagents` command interactive."""
     if ctx.invoked_subcommand is None:
-        run_analysis()
+        try:
+            run_analysis()
+        except _NO_CONSOLE_ERRORS:
+            typer.echo(
+                "Error: no Windows console available. The interactive CLI needs a real "
+                "console buffer — run it from Windows Terminal, PowerShell, or cmd.exe "
+                "rather than a piped or embedded terminal.",
+                err=True,
+            )
+            raise typer.Exit(code=1) from None
 
 
 @app.command()
 def analyze(
-    ticker: str | None = typer.Option(None, "--ticker", help="Ticker symbol, e.g. 0700.HK."),
+    ticker: str | None = typer.Option(
+        None,
+        "--ticker",
+        help="Ticker symbol or exact Chinese A-share name, e.g. 0700.HK or 长飞光纤.",
+    ),
     analysis_date: str | None = typer.Option(None, "--date", help="Analysis date (YYYY-MM-DD)."),
     analysts: str | None = typer.Option(
         None, "--analysts", help="Comma-separated: market,fundamentals,news,social."
@@ -1380,6 +1184,13 @@ def analyze(
     provider: str | None = typer.Option(None, "--provider", help="LLM provider."),
     deep_model: str | None = typer.Option(None, "--deep-model", help="Deep-thinking model ID."),
     quick_model: str | None = typer.Option(None, "--quick-model", help="Quick-thinking model ID."),
+    research_depth: int | None = typer.Option(
+        None,
+        "--research-depth",
+        min=1,
+        max=5,
+        help="Research/debate depth from 1 to 5 (non-interactive mode).",
+    ),
     output_language: str = typer.Option("English", "--output-language"),
     no_interactive: bool = typer.Option(
         False, "--no-interactive", help="Run without selection or post-run prompts."
@@ -1404,7 +1215,14 @@ def analyze(
         selections = None
         if no_interactive:
             selections = _non_interactive_selections(
-                ticker, analysis_date, analysts, provider, deep_model, quick_model, output_language
+                ticker,
+                analysis_date,
+                analysts,
+                provider,
+                deep_model,
+                quick_model,
+                research_depth,
+                output_language,
             )
         run_analysis(
             checkpoint=checkpoint,
@@ -1422,6 +1240,72 @@ def analyze(
             err=True,
         )
         raise typer.Exit(code=1) from None
+
+
+@app.command()
+def web(
+    host: str = typer.Option(
+        "127.0.0.1",
+        "--host",
+        help="Host to bind the web server to.",
+    ),
+    port: int = typer.Option(
+        8000,
+        "--port",
+        help="Port to bind the web server to.",
+    ),
+    allow_remote: bool = typer.Option(
+        False,
+        "--allow-remote",
+        help="Allow binding to a non-loopback host. The Web UI has no authentication.",
+    ),
+):
+    """Launch the TradingAgents web interface.
+
+    Opens a browser-based UI that mirrors the CLI workflow:
+    configuration form → real-time dashboard → final report.
+
+    API keys are read from your .env file (same as the CLI mode).
+    Only accessible from localhost by default — single-user local use.
+    """
+    if host not in {"127.0.0.1", "localhost", "::1"} and not allow_remote:
+        console.print(
+            "[red]Refusing to expose the unauthenticated Web UI on a remote "
+            "interface.[/red]\n"
+            "[dim]Use --allow-remote only on a trusted network.[/dim]"
+        )
+        raise typer.Exit(code=2)
+
+    try:
+        import uvicorn
+
+        from web.app import app as web_app
+    except ImportError as e:
+        console.print(
+            f"[red]Missing dependency: {e}[/red]\n"
+            f"[dim]Install with: pip install fastapi uvicorn[/dim]"
+        )
+        raise typer.Exit(code=1) from e
+
+    console.print()
+    console.print(
+        Panel(
+            "[bold green]TradingAgents Web 界面[/bold green]\n\n"
+            f"[bold]服务器启动地址：[/bold] [cyan]http://{host}:{port}[/cyan]\n\n"
+            "[dim]在浏览器中打开上述地址即可使用。[/dim]\n"
+            "[dim]按 Ctrl+C 停止服务器。[/dim]",
+            border_style="green",
+            padding=(1, 2),
+            title="Web 模式",
+        )
+    )
+    console.print()
+    if allow_remote and host not in {"127.0.0.1", "localhost", "::1"}:
+        console.print(
+            "[bold yellow]Warning:[/bold yellow] remote access is enabled and "
+            "the Web UI has no authentication."
+        )
+    uvicorn.run(web_app, host=host, port=port, log_level="info")
 
 
 if __name__ == "__main__":

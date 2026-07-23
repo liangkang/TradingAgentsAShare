@@ -11,6 +11,20 @@ from .alpha_vantage import (
     get_news as get_alpha_vantage_news,
     get_stock as get_alpha_vantage_stock,
 )
+from .akshare_vendor import (
+    get_stock_data_akshare,
+    get_stock_stats_indicators_akshare,
+    get_fundamentals_akshare as get_akshare_fundamentals,
+    get_balance_sheet_akshare as get_akshare_balance_sheet,
+    get_cashflow_akshare as get_akshare_cashflow,
+    get_income_statement_akshare as get_akshare_income_statement,
+    get_insider_transactions_akshare as get_akshare_insider_transactions,
+    get_news_akshare as get_akshare_news,
+    get_global_news_akshare as get_akshare_global_news,
+    get_fund_flow_akshare,
+    get_lhb_detail_akshare,
+    get_institute_hold_akshare,
+)
 from .config import get_config
 from .errors import (
     NoMarketDataError,
@@ -35,9 +49,10 @@ logger = logging.getLogger(__name__)
 # Tools organized by category
 TOOLS_CATEGORIES = {
     "core_stock_apis": {
-        "description": "OHLCV stock price data",
+        "description": "OHLCV stock price data & fund flow",
         "tools": [
-            "get_stock_data"
+            "get_stock_data",
+            "get_fund_flow",
         ]
     },
     "technical_indicators": {
@@ -47,20 +62,22 @@ TOOLS_CATEGORIES = {
         ]
     },
     "fundamental_data": {
-        "description": "Company fundamentals",
+        "description": "Company fundamentals & holdings",
         "tools": [
             "get_fundamentals",
             "get_balance_sheet",
             "get_cashflow",
-            "get_income_statement"
+            "get_income_statement",
+            "get_institute_hold",
         ]
     },
     "news_data": {
-        "description": "News and insider data",
+        "description": "News, insider data & LHB",
         "tools": [
             "get_news",
             "get_global_news",
             "get_insider_transactions",
+            "get_lhb_detail",
         ]
     },
     "macro_data": {
@@ -74,10 +91,11 @@ TOOLS_CATEGORIES = {
         "tools": [
             "get_prediction_markets",
         ]
-    }
+    },
 }
 
 VENDOR_LIST = [
+    "akshare",
     "yfinance",
     "fred",
     "polymarket",
@@ -91,47 +109,85 @@ VENDOR_LIST = [
 # categories (prices, fundamentals, news) still raise so a broken primary is loud.
 OPTIONAL_CATEGORIES = {"macro_data", "prediction_markets"}
 
+
+def _no_data(method: str, vendor: str):
+    """Return a callable that always raises NoMarketDataError.
+
+    Used as a stub for vendors that don't support a particular tool.
+    """
+    def _raise(*args, **kwargs):
+        raise NoMarketDataError(
+            args[0] if args else "unknown",
+            args[0] if args else "unknown",
+            f"{vendor} does not support {method}",
+        )
+    return _raise
+
 # Mapping of methods to their vendor-specific implementations
 VENDOR_METHODS = {
     # core_stock_apis
     "get_stock_data": {
+        "akshare": get_stock_data_akshare,
         "alpha_vantage": get_alpha_vantage_stock,
         "yfinance": get_YFin_data_online,
     },
     # technical_indicators
     "get_indicators": {
+        "akshare": get_stock_stats_indicators_akshare,
         "alpha_vantage": get_alpha_vantage_indicator,
         "yfinance": get_stock_stats_indicators_window,
     },
     # fundamental_data
     "get_fundamentals": {
+        "akshare": get_akshare_fundamentals,
         "alpha_vantage": get_alpha_vantage_fundamentals,
         "yfinance": get_yfinance_fundamentals,
     },
     "get_balance_sheet": {
+        "akshare": get_akshare_balance_sheet,
         "alpha_vantage": get_alpha_vantage_balance_sheet,
         "yfinance": get_yfinance_balance_sheet,
     },
     "get_cashflow": {
+        "akshare": get_akshare_cashflow,
         "alpha_vantage": get_alpha_vantage_cashflow,
         "yfinance": get_yfinance_cashflow,
     },
     "get_income_statement": {
+        "akshare": get_akshare_income_statement,
         "alpha_vantage": get_alpha_vantage_income_statement,
         "yfinance": get_yfinance_income_statement,
     },
     # news_data
     "get_news": {
+        "akshare": get_akshare_news,
         "alpha_vantage": get_alpha_vantage_news,
         "yfinance": get_news_yfinance,
     },
     "get_global_news": {
+        "akshare": get_akshare_global_news,
         "yfinance": get_global_news_yfinance,
         "alpha_vantage": get_alpha_vantage_global_news,
     },
     "get_insider_transactions": {
+        "akshare": get_akshare_insider_transactions,
         "alpha_vantage": get_alpha_vantage_insider_transactions,
         "yfinance": get_yfinance_insider_transactions,
+    },
+    "get_fund_flow": {
+        "akshare": get_fund_flow_akshare,
+        "alpha_vantage": _no_data("get_fund_flow", "alpha_vantage"),
+        "yfinance": _no_data("get_fund_flow", "yfinance"),
+    },
+    "get_lhb_detail": {
+        "akshare": get_lhb_detail_akshare,
+        "alpha_vantage": _no_data("get_lhb_detail", "alpha_vantage"),
+        "yfinance": _no_data("get_lhb_detail", "yfinance"),
+    },
+    "get_institute_hold": {
+        "akshare": get_institute_hold_akshare,
+        "alpha_vantage": _no_data("get_institute_hold", "alpha_vantage"),
+        "yfinance": _no_data("get_institute_hold", "yfinance"),
     },
     # macro_data
     "get_macro_indicators": {
@@ -167,9 +223,14 @@ def get_vendor(category: str, method: str = None) -> str:
 
 def route_to_vendor(method: str, *args, **kwargs):
     """Route method calls to appropriate vendor implementation with fallback support."""
+    # Internal, additive routing hint used when the public tool has enough
+    # context to rule out a market-specific vendor. It is removed before the
+    # selected vendor implementation is called, so vendor signatures stay
+    # unchanged.
+    excluded_vendors = set(kwargs.pop("_exclude_vendors", ()))
     category = get_category_for_method(method)
     vendor_config = get_vendor(category, method)
-    primary_vendors = [v.strip() for v in vendor_config.split(',')]
+    primary_vendors = [v.strip() for v in vendor_config.split(",")]
 
     if method not in VENDOR_METHODS:
         raise ValueError(f"Method '{method}' not supported")
@@ -183,14 +244,19 @@ def route_to_vendor(method: str, *args, **kwargs):
     # The "default" sentinel (no explicit config) uses all available vendors.
     explicit = [v for v in primary_vendors if v and v != "default"]
     if explicit:
-        vendor_chain = [v for v in explicit if v in VENDOR_METHODS[method]]
+        vendor_chain = [
+            v for v in explicit if v in VENDOR_METHODS[method] and v not in excluded_vendors
+        ]
         if not vendor_chain:
             raise ValueError(
-                f"Configured vendor(s) {explicit} not available for '{method}'. "
+                f"Configured vendor(s) {explicit} not available for '{method}' "
+                f"after applying market compatibility. "
                 f"Available: {all_available_vendors}."
             )
     else:
-        vendor_chain = all_available_vendors
+        vendor_chain = [
+            vendor for vendor in all_available_vendors if vendor not in excluded_vendors
+        ]
 
     last_no_data: NoMarketDataError | None = None
     first_error: Exception | None = None

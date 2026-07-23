@@ -9,11 +9,10 @@ from .stockstats_utils import (
     StockstatsUtils,
     _assert_ohlcv_not_stale,
     filter_financials_by_date,
-    load_ohlcv,
+    load_ohlcv_yfinance,
     yf_retry,
 )
 from .symbol_utils import NoMarketDataError, normalize_symbol
-
 
 def get_YFin_data_online(
     symbol: Annotated[str, "ticker symbol of the company"],
@@ -221,7 +220,7 @@ def _get_stock_stats_bulk(
     """
     from stockstats import wrap
 
-    data = load_ohlcv(symbol, curr_date)
+    data = load_ohlcv_yfinance(symbol, curr_date)
     df = wrap(data)
     df["Date"] = df["Date"].dt.strftime("%Y-%m-%d")
 
