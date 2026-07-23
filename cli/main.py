@@ -20,6 +20,7 @@ from rich.table import Table
 from rich.text import Text
 
 from cli.announcements import display_announcements, fetch_announcements
+from cli.models import AnalystType
 from cli.stats_handler import StatsCallbackHandler
 from cli.utils import (
     ask_anthropic_effort,
@@ -33,6 +34,8 @@ from cli.utils import (
     detect_asset_type,
     ensure_api_key,
     get_ticker,
+    is_valid_ticker_input,
+    normalize_ticker_symbol,
     prompt_openai_compatible_url,
     resolve_backend_url,
     select_analysts,
@@ -1001,9 +1004,14 @@ def _build_run_config(selections: dict, checkpoint: bool | None) -> dict:
     return config
 
 
-def run_analysis(checkpoint: bool | None = None):
+def run_analysis(
+    checkpoint: bool | None = None,
+    selections: dict | None = None,
+    interactive: bool = True,
+):
     # First get all user selections
-    selections = get_user_selections()
+    if selections is None:
+        selections = get_user_selections()
 
     config = _build_run_config(selections, checkpoint)
 
@@ -1257,6 +1265,9 @@ def run_analysis(checkpoint: bool | None = None):
     console.print("\n[bold cyan]Analysis Complete![/bold cyan]\n")
     console.print(f"[dim]{analyst_wall_time_tracker.format_summary()}[/dim]")
 
+    if not interactive:
+        return final_state
+
     # Prompt to save report
     save_choice = typer.prompt("Save report?", default="Y").strip().upper()
     if save_choice in ("Y", "YES", ""):
@@ -1280,8 +1291,99 @@ def run_analysis(checkpoint: bool | None = None):
         display_complete_report(final_state)
 
 
+def _non_interactive_selections(
+    ticker: str | None,
+    analysis_date: str | None,
+    analysts: str | None,
+    provider: str | None,
+    deep_model: str | None,
+    quick_model: str | None,
+    output_language: str,
+) -> dict:
+    """Validate CLI values and translate them to the existing run selections."""
+    missing = [
+        name
+        for name, value in {
+            "--ticker": ticker,
+            "--date": analysis_date,
+            "--analysts": analysts,
+            "--provider": provider,
+            "--deep-model": deep_model,
+            "--quick-model": quick_model,
+        }.items()
+        if not value
+    ]
+    if missing:
+        raise typer.BadParameter(
+            f"non-interactive mode requires: {', '.join(missing)}"
+        )
+
+    assert ticker and analysis_date and analysts and provider and deep_model and quick_model
+    if not is_valid_ticker_input(ticker):
+        raise typer.BadParameter("invalid ticker", param_hint="--ticker")
+    try:
+        parsed_date = datetime.datetime.strptime(analysis_date, "%Y-%m-%d").date()
+    except ValueError:
+        raise typer.BadParameter("must use YYYY-MM-DD", param_hint="--date") from None
+    if parsed_date > datetime.datetime.now().date():
+        raise typer.BadParameter("cannot be in the future", param_hint="--date")
+
+    ticker = normalize_ticker_symbol(ticker)
+    asset_type = detect_asset_type(ticker)
+    analyst_names = [value.strip().lower() for value in analysts.split(",") if value.strip()]
+    valid_names = {item.value for item in AnalystType}
+    invalid = sorted(set(analyst_names) - valid_names)
+    if invalid:
+        raise typer.BadParameter(
+            f"unknown analyst(s): {', '.join(invalid)}; choose from {', '.join(sorted(valid_names))}",
+            param_hint="--analysts",
+        )
+    if not analyst_names:
+        raise typer.BadParameter("select at least one analyst", param_hint="--analysts")
+    if asset_type.value == "crypto" and "fundamentals" in analyst_names:
+        raise typer.BadParameter(
+            "fundamentals is not available for crypto assets", param_hint="--analysts"
+        )
+
+    provider = provider.lower()
+    return {
+        "ticker": ticker,
+        "asset_type": asset_type.value,
+        "analysis_date": analysis_date,
+        "analysts": [AnalystType(value) for value in analyst_names],
+        "research_depth": DEFAULT_CONFIG["max_debate_rounds"],
+        "llm_provider": provider,
+        "backend_url": resolve_backend_url(provider, env_url=DEFAULT_CONFIG["backend_url"]),
+        "shallow_thinker": quick_model,
+        "deep_thinker": deep_model,
+        "google_thinking_level": DEFAULT_CONFIG["google_thinking_level"],
+        "openai_reasoning_effort": DEFAULT_CONFIG["openai_reasoning_effort"],
+        "anthropic_effort": DEFAULT_CONFIG["anthropic_effort"],
+        "output_language": output_language,
+    }
+
+
+@app.callback(invoke_without_command=True)
+def root(ctx: typer.Context):
+    """Keep the historical bare `tradingagents` command interactive."""
+    if ctx.invoked_subcommand is None:
+        run_analysis()
+
+
 @app.command()
 def analyze(
+    ticker: str | None = typer.Option(None, "--ticker", help="Ticker symbol, e.g. 0700.HK."),
+    analysis_date: str | None = typer.Option(None, "--date", help="Analysis date (YYYY-MM-DD)."),
+    analysts: str | None = typer.Option(
+        None, "--analysts", help="Comma-separated: market,fundamentals,news,social."
+    ),
+    provider: str | None = typer.Option(None, "--provider", help="LLM provider."),
+    deep_model: str | None = typer.Option(None, "--deep-model", help="Deep-thinking model ID."),
+    quick_model: str | None = typer.Option(None, "--quick-model", help="Quick-thinking model ID."),
+    output_language: str = typer.Option("English", "--output-language"),
+    no_interactive: bool = typer.Option(
+        False, "--no-interactive", help="Run without selection or post-run prompts."
+    ),
     checkpoint: bool | None = typer.Option(
         None,
         "--checkpoint/--no-checkpoint",
@@ -1299,7 +1401,16 @@ def analyze(
         n = clear_all_checkpoints(DEFAULT_CONFIG["data_cache_dir"])
         console.print(f"[yellow]Cleared {n} checkpoint(s).[/yellow]")
     try:
-        run_analysis(checkpoint=checkpoint)
+        selections = None
+        if no_interactive:
+            selections = _non_interactive_selections(
+                ticker, analysis_date, analysts, provider, deep_model, quick_model, output_language
+            )
+        run_analysis(
+            checkpoint=checkpoint,
+            selections=selections,
+            interactive=not no_interactive,
+        )
     except _NO_CONSOLE_ERRORS:
         # A terminal with no console buffer cannot host the interactive prompts.
         # Emit one actionable line on stderr instead of a prompt_toolkit

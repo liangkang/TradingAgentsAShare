@@ -169,6 +169,47 @@ python -m cli.main     # alternative: run directly from source
 ```
 You will see a screen where you can select your desired tickers, analysis date, LLM provider, research depth, and more.
 
+#### Non-interactive CLI
+
+For scripts, CI jobs, or terminal-only workflows, pass all analysis selections
+directly and add `--no-interactive`:
+
+```bash
+export DEEPSEEK_API_KEY=...
+
+tradingagents analyze \
+  --ticker 0700.HK \
+  --date 2026-07-22 \
+  --analysts market,fundamentals,news,social \
+  --provider deepseek \
+  --deep-model deepseek-v4-flash \
+  --quick-model deepseek-v4-flash \
+  --output-language Chinese \
+  --no-interactive
+```
+
+When using a uv-managed project environment, prefix the same command with
+`uv run`:
+
+```bash
+uv run tradingagents analyze \
+  --ticker 0700.HK \
+  --date 2026-07-22 \
+  --analysts market,fundamentals,news,social \
+  --provider deepseek \
+  --deep-model deepseek-v4-flash \
+  --quick-model deepseek-v4-flash \
+  --output-language Chinese \
+  --no-interactive
+```
+
+In non-interactive mode, `--ticker`, `--date`, `--analysts`, `--provider`,
+`--deep-model`, and `--quick-model` are required. Analyst values are
+comma-separated and may include `market`, `fundamentals`, `news`, and `social`.
+The API key for the selected provider must already be present in the
+environment or `.env`. Run `tradingagents analyze --help` to see all available
+options, including checkpoint controls.
+
 ### Markets and tickers
 
 TradingAgents works with any market Yahoo Finance covers, using the exchange-suffixed ticker. Company identity and the alpha benchmark resolve automatically per market.
