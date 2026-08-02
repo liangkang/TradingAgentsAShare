@@ -773,6 +773,21 @@ def save_report_to_disk(final_state, ticker: str, save_path: Path):
     return write_report_tree(final_state, ticker, save_path)
 
 
+def _save_complete_report(final_state, ticker: str, save_path: Path | str | None = None):
+    """Write the report tree and print the destination path."""
+    if save_path is None:
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        save_path = Path.cwd() / "reports" / f"{ticker}_{timestamp}"
+    else:
+        save_path = Path(save_path)
+    try:
+        report_file = save_report_to_disk(final_state, ticker, save_path)
+        console.print(f"\n[green]✓ Report saved to:[/green] {save_path.resolve()}")
+        console.print(f"  [dim]Complete report:[/dim] {report_file.name}")
+    except Exception as e:
+        console.print(f"[red]Error saving report: {e}[/red]")
+
+
 def display_complete_report(final_state):
     """Display the complete analysis report sequentially (avoids truncation)."""
     console.print()
@@ -868,6 +883,8 @@ def run_analysis(
     checkpoint: bool | None = None,
     selections: dict | None = None,
     interactive: bool = True,
+    save_report: bool = False,
+    save_path: Path | str | None = None,
 ):
     # First get all user selections
     if selections is None:
@@ -1048,6 +1065,8 @@ def run_analysis(
     console.print(f"[dim]{analyst_wall_time_tracker.format_summary()}[/dim]")
 
     if not interactive:
+        if save_report:
+            _save_complete_report(final_state, selections["ticker"], save_path)
         return final_state
 
     # Prompt to save report
@@ -1059,13 +1078,7 @@ def run_analysis(
             "Save path (press Enter for default)",
             default=str(default_path)
         ).strip()
-        save_path = Path(save_path_str)
-        try:
-            report_file = save_report_to_disk(final_state, selections["ticker"], save_path)
-            console.print(f"\n[green]✓ Report saved to:[/green] {save_path.resolve()}")
-            console.print(f"  [dim]Complete report:[/dim] {report_file.name}")
-        except Exception as e:
-            console.print(f"[red]Error saving report: {e}[/red]")
+        _save_complete_report(final_state, selections["ticker"], save_path_str)
 
     # Prompt to display full report
     display_choice = typer.prompt("\nDisplay full report on screen?", default="Y").strip().upper()
@@ -1206,6 +1219,16 @@ def analyze(
         "--clear-checkpoints",
         help="Delete all saved checkpoints before running (force fresh start).",
     ),
+    save_report: bool = typer.Option(
+        False,
+        "--save-report",
+        help="Write complete_report.md after a non-interactive run.",
+    ),
+    save_path: str | None = typer.Option(
+        None,
+        "--save-path",
+        help="Directory for --save-report output (default: ./reports/{TICKER}_{timestamp}).",
+    ),
 ):
     if clear_checkpoints:
         from tradingagents.graph.checkpointer import clear_all_checkpoints
@@ -1228,6 +1251,8 @@ def analyze(
             checkpoint=checkpoint,
             selections=selections,
             interactive=not no_interactive,
+            save_report=save_report,
+            save_path=save_path,
         )
     except _NO_CONSOLE_ERRORS:
         # A terminal with no console buffer cannot host the interactive prompts.

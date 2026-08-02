@@ -38,7 +38,9 @@ def test_projector_builds_complete_reports_and_statuses():
 
     assert projector.reports["market_report"] == "Market"
     assert "Bull" in projector.reports["investment_plan"]
-    assert "Rating: Hold" in projector.reports["final_trade_decision"]
+    assert projector.reports["final_trade_decision"] == "Rating: Hold"
+    assert "Aggressive" not in projector.reports["final_trade_decision"]
+    assert projector.reports["risk_aggressive"] == "Aggressive"
     assert all(status == "completed" for status in projector.agent_status.values())
     assert {event.event for event in events} >= {
         "agent_status",

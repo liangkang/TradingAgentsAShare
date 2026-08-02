@@ -7,24 +7,33 @@ from typer.testing import CliRunner
 from cli.main import app
 
 
+def _non_interactive_args(**overrides):
+    args = {
+        "ticker": "0700.HK",
+        "date": "2026-07-22",
+        "analysts": "market,fundamentals,news,social",
+        "provider": "deepseek",
+        "deep_model": "deepseek-v4-flash",
+        "quick_model": "deepseek-v4-flash",
+    }
+    args.update(overrides)
+    cli_args = ["analyze", "--no-interactive"]
+    for key, value in args.items():
+        flag = key.replace("_", "-")
+        cli_args.extend([f"--{flag}", str(value)])
+    return cli_args
+
+
 @pytest.mark.unit
 def test_analyze_accepts_non_interactive_options():
     runner = CliRunner()
     with mock.patch("cli.main.run_analysis") as run:
         result = runner.invoke(
             app,
-            [
-                "analyze",
-                "--ticker", "0700.HK",
-                "--date", "2026-07-22",
-                "--analysts", "market,fundamentals,news,social",
-                "--provider", "deepseek",
-                "--deep-model", "deepseek-v4-flash",
-                "--quick-model", "deepseek-v4-flash",
-                "--research-depth", "4",
-                "--output-language", "Chinese",
-                "--no-interactive",
-            ],
+            _non_interactive_args(
+                research_depth="4",
+                output_language="Chinese",
+            ),
         )
 
     assert result.exit_code == 0, result.output
@@ -37,6 +46,46 @@ def test_analyze_accepts_non_interactive_options():
     assert selections["research_depth_explicit"] is True
     assert selections["output_language"] == "Chinese"
     assert run.call_args.kwargs["interactive"] is False
+
+
+@pytest.mark.unit
+def test_analyze_passes_save_report_flags():
+    runner = CliRunner()
+    with mock.patch("cli.main.run_analysis") as run:
+        result = runner.invoke(
+            app,
+            [
+                *_non_interactive_args(),
+                "--save-report",
+                "--save-path",
+                "/tmp/ta-report",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert run.call_args.kwargs["save_report"] is True
+    assert run.call_args.kwargs["save_path"] == "/tmp/ta-report"
+
+
+@pytest.mark.unit
+def test_save_complete_report_writes_complete_report(tmp_path):
+    from cli.main import _save_complete_report
+
+    final_state = {
+        "market_report": "Market outlook is stable.",
+        "risk_debate_state": {
+            "judge_decision": "**Rating**: Hold\n\n**Executive Summary**: Wait.",
+        },
+    }
+    save_dir = tmp_path / "0700.HK_test"
+
+    _save_complete_report(final_state, "0700.HK", save_dir)
+
+    complete_report = save_dir / "complete_report.md"
+    assert complete_report.exists()
+    text = complete_report.read_text(encoding="utf-8")
+    assert "Trading Analysis Report: 0700.HK" in text
+    assert "**Rating**: Hold" in text
 
 
 @pytest.mark.unit

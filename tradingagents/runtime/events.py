@@ -297,21 +297,31 @@ class AnalysisEventProjector:
             ):
                 self._set_status(events, agent, "completed")
 
-        risk_parts = []
-        if aggressive:
-            risk_parts.append(f"### Aggressive Analyst Analysis\n{aggressive}")
-        if conservative:
-            risk_parts.append(f"### Conservative Analyst Analysis\n{conservative}")
-        if neutral:
-            risk_parts.append(f"### Neutral Analyst Analysis\n{neutral}")
+        # Previously final_trade_decision concatenated all risk-debate sections.
+        # Web "最终决策" now shows only the Portfolio Manager decision; the
+        # individual risk analyst tabs still receive their own report_update events.
+        # risk_parts = []
+        # if aggressive:
+        #     risk_parts.append(f"### Aggressive Analyst Analysis\n{aggressive}")
+        # if conservative:
+        #     risk_parts.append(f"### Conservative Analyst Analysis\n{conservative}")
+        # if neutral:
+        #     risk_parts.append(f"### Neutral Analyst Analysis\n{neutral}")
+        # if risk_judge:
+        #     risk_parts.append(f"### Portfolio Manager Decision\n{risk_judge}")
+        # if risk_parts:
+        #     self._report(
+        #         events,
+        #         "final_trade_decision",
+        #         REPORT_TITLES["final_trade_decision"],
+        #         "\n\n".join(risk_parts),
+        #     )
         if risk_judge:
-            risk_parts.append(f"### Portfolio Manager Decision\n{risk_judge}")
-        if risk_parts:
             self._report(
                 events,
                 "final_trade_decision",
                 REPORT_TITLES["final_trade_decision"],
-                "\n\n".join(risk_parts),
+                risk_judge,
             )
 
         return events
