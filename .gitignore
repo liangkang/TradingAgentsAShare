@@ -223,10 +223,10 @@ __marimo__/
 reports/
 
 # Vibe Coding
-.agents/
-.claude/
-AGENTS.md
-CLAUDE.md
+# .agents/
+# .claude/
+# AGENTS.md
+# CLAUDE.md
 
 # uv
 uv.lock

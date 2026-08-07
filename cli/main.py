@@ -885,6 +885,9 @@ def run_analysis(
     interactive: bool = True,
     save_report: bool = False,
     save_path: Path | str | None = None,
+    vnpy_signal_dir: Path | str | None = None,
+    vnpy_exchange: str | None = None,
+    vnpy_signal_ttl_hours: int = 24,
 ):
     # First get all user selections
     if selections is None:
@@ -1064,6 +1067,18 @@ def run_analysis(
     console.print("\n[bold cyan]Analysis Complete![/bold cyan]\n")
     console.print(f"[dim]{analyst_wall_time_tracker.format_summary()}[/dim]")
 
+    if vnpy_signal_dir is not None:
+        from tradingagents.integrations.vnpy import export_vnpy_signal
+
+        signal_path = export_vnpy_signal(
+            final_state,
+            selections["ticker"],
+            vnpy_signal_dir,
+            exchange=vnpy_exchange,
+            ttl_hours=vnpy_signal_ttl_hours,
+        )
+        console.print(f"[green]Exported vn.py signal:[/green] {signal_path}")
+
     if not interactive:
         if save_report:
             _save_complete_report(final_state, selections["ticker"], save_path)
@@ -1229,6 +1244,22 @@ def analyze(
         "--save-path",
         help="Directory for --save-report output (default: ./reports/{TICKER}_{timestamp}).",
     ),
+    vnpy_signal_dir: str | None = typer.Option(
+        None,
+        "--vnpy-signal-dir",
+        help="Write a validated vn.py signal JSON file to this directory after analysis.",
+    ),
+    vnpy_exchange: str | None = typer.Option(
+        None,
+        "--vnpy-exchange",
+        help="vn.py exchange override, required when it cannot be inferred from the ticker.",
+    ),
+    vnpy_signal_ttl_hours: int = typer.Option(
+        24,
+        "--vnpy-signal-ttl-hours",
+        min=1,
+        help="Hours before an exported vn.py signal expires.",
+    ),
 ):
     if clear_checkpoints:
         from tradingagents.graph.checkpointer import clear_all_checkpoints
@@ -1253,6 +1284,9 @@ def analyze(
             interactive=not no_interactive,
             save_report=save_report,
             save_path=save_path,
+            vnpy_signal_dir=vnpy_signal_dir,
+            vnpy_exchange=vnpy_exchange,
+            vnpy_signal_ttl_hours=vnpy_signal_ttl_hours,
         )
     except _NO_CONSOLE_ERRORS:
         # A terminal with no console buffer cannot host the interactive prompts.

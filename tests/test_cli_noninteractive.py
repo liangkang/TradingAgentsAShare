@@ -68,6 +68,29 @@ def test_analyze_passes_save_report_flags():
 
 
 @pytest.mark.unit
+def test_analyze_passes_vnpy_signal_flags():
+    runner = CliRunner()
+    with mock.patch("cli.main.run_analysis") as run:
+        result = runner.invoke(
+            app,
+            [
+                *_non_interactive_args(),
+                "--vnpy-signal-dir",
+                "/tmp/ta-signals",
+                "--vnpy-exchange",
+                "SSE",
+                "--vnpy-signal-ttl-hours",
+                "12",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert run.call_args.kwargs["vnpy_signal_dir"] == "/tmp/ta-signals"
+    assert run.call_args.kwargs["vnpy_exchange"] == "SSE"
+    assert run.call_args.kwargs["vnpy_signal_ttl_hours"] == 12
+
+
+@pytest.mark.unit
 def test_save_complete_report_writes_complete_report(tmp_path):
     from cli.main import _save_complete_report
 
