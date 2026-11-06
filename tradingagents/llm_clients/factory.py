@@ -1,4 +1,4 @@
-import os
+
 from typing import Any
 
 from .base_client import BaseLLMClient
@@ -35,11 +35,6 @@ def create_llm_client(
     # through the provider registry (single source of truth).
     if provider_lower == "anthropic":
         from .anthropic_client import AnthropicClient
-        return AnthropicClient(model, base_url, **kwargs)
-
-    if provider_lower == "evolink":
-        from .anthropic_client import AnthropicClient
-        kwargs.setdefault("api_key", os.environ.get("EVOLINK_API_KEY"))
         return AnthropicClient(model, base_url, **kwargs)
 
     if provider_lower == "google":
@@ -111,8 +106,7 @@ def build_llm_kwargs(config: dict) -> dict[str, Any]:
         if reasoning_effort:
             kwargs["reasoning_effort"] = reasoning_effort
 
-    elif provider in ("anthropic", "evolink"):
-        # Evolink serves the Anthropic API, so it takes Claude's effort setting.
+    elif provider == "anthropic":
         effort = config.get("anthropic_effort")
         if effort:
             kwargs["effort"] = effort

@@ -18,7 +18,6 @@ _PRIMARY_OPTIONS = (
     ProviderOption("Google", "google", None),
     ProviderOption("Anthropic", "anthropic", "https://api.anthropic.com/"),
     ProviderOption("ChatGPT (Plus or Pro plan)", "chatgpt", "https://api.openai.com/v1"),
-    ProviderOption("Evolink (Claude API)", "evolink", "https://direct.evolink.ai"),
     ProviderOption("xAI", "xai", "https://api.x.ai/v1"),
     ProviderOption("DeepSeek", "deepseek", "https://api.deepseek.com"),
     ProviderOption("Qwen (International)", "qwen", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"),

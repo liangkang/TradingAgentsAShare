@@ -55,7 +55,7 @@ Extract from the user message:
 | `--analysts` | `market,fundamentals,news,social` for stocks; drop `fundamentals` for crypto |
 | `--research-depth` | `TRADINGAGENTS_MAX_DEBATE_ROUNDS` or `1` |
 | `--output-language` | `Chinese` if user writes in Chinese; else `TRADINGAGENTS_OUTPUT_LANGUAGE` or `English` |
-| `--provider` | `TRADINGAGENTS_LLM_PROVIDER` or **`deepseek`** (skill fallback; not `evolink`) |
+| `--provider` | `TRADINGAGENTS_LLM_PROVIDER` or **`deepseek`** (skill fallback) |
 | `--deep-model` | `TRADINGAGENTS_DEEP_THINK_LLM` or `deepseek-v4-pro` when provider is `deepseek` |
 | `--quick-model` | `TRADINGAGENTS_QUICK_THINK_LLM` or `deepseek-v4-flash` when provider is `deepseek` |
 | `--save-path` | `./reports/{TICKER}_{YYYYMMDD_HHMMSS}` |

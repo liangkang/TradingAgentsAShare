@@ -15,7 +15,7 @@ This repository is a fork of TauricResearch/TradingAgents (currently based on v0
 
 **Key Technologies:**
 - LangGraph for agent orchestration and state management
-- Multi-provider LLM support (OpenAI, ChatGPT plan, Anthropic, Evolink, Google, xAI, DeepSeek, Qwen, GLM, MiniMax, OpenRouter, Mistral, Kimi, Groq, NVIDIA NIM, Azure, Bedrock, Ollama)
+- Multi-provider LLM support (OpenAI, ChatGPT plan, Anthropic, Google, xAI, DeepSeek, Qwen, GLM, MiniMax, OpenRouter, Mistral, Kimi, Groq, NVIDIA NIM, Azure, Bedrock, Ollama)
 - Structured output via Pydantic schemas (Sentiment Analyst, Research Manager, Trader, Portfolio Manager)
 - akshare / yfinance / SEC EDGAR / Alpha Vantage / FRED / Polymarket for data
 - FastAPI + uvicorn for the Web frontend
@@ -261,7 +261,6 @@ Render helpers in `schemas.py` (`render_research_plan`, `render_trader_proposal`
 OPENAI_API_KEY          # OpenAI (GPT)
 GOOGLE_API_KEY          # Google (Gemini)
 ANTHROPIC_API_KEY       # Anthropic (Claude)
-EVOLINK_API_KEY         # Evolink (Claude API)
 XAI_API_KEY             # xAI (Grok)
 DEEPSEEK_API_KEY        # DeepSeek
 DASHSCOPE_API_KEY       # Qwen (International; DASHSCOPE_CN_API_KEY for China)
