@@ -113,6 +113,8 @@ def offline(monkeypatch, tmp_path):
     })
     monkeypatch.setattr(snapshot, "load_ohlcv",
                         lambda *a, **k: called.add("ohlcv") or prices.copy())
+    monkeypatch.setattr(snapshot, "_load_ohlcv_akshare",
+                        lambda *a, **k: called.add("ohlcv") or prices.copy())
     monkeypatch.setattr(sentiment_analyst, "fetch_stocktwits_messages", lambda *a, **k: "no posts")
     monkeypatch.setattr(sentiment_analyst, "fetch_reddit_posts", lambda *a, **k: "no posts")
     monkeypatch.setattr(yahoo_market.yf, "Ticker", lambda s: type("T", (), {"info": {"longName": "NVIDIA"}})())
@@ -225,8 +227,9 @@ def test_a_streamed_run_reads_its_own_graph_config(tmp_path, monkeypatch, offlin
     graph = _graph(tmp_path, monkeypatch, ScriptedModel(), output_language="French")
     set_config({"output_language": "German"})
     seen = []
-    monkeypatch.setitem(router.VENDOR_METHODS["get_stock_data"], "yfinance",
-                        lambda *a, **k: seen.append(get_config()["output_language"]) or "prices")
+    for vendor in ("akshare", "yfinance"):  # whichever the default chain asks first
+        monkeypatch.setitem(router.VENDOR_METHODS["get_stock_data"], vendor,
+                            lambda *a, **k: seen.append(get_config()["output_language"]) or "prices")
 
     between = [get_config()["output_language"]
                for _ in graph.stream_run(graph.create_run_state("NVDA", TRADE_DATE), **graph.propagator.get_graph_args())]

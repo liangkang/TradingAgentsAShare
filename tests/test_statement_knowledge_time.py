@@ -50,11 +50,20 @@ def test_a_current_run_is_still_served_yahoo_statements():
 
 
 @pytest.mark.unit
-def test_statements_come_from_sec_edgar_first_by_default():
+def test_a_us_filers_statements_come_from_sec_edgar_by_default():
+    """The default chain is akshare,sec_edgar,yfinance; akshare serves A-shares only,
+    so a US filer's statements come from SEC EDGAR as filed."""
+    from tradingagents.dataflows.errors import NoMarketDataError
+
     set_config(copy.deepcopy(default_config.DEFAULT_CONFIG))
     served = []
     chain = {name: (lambda *a, _n=name, **k: served.append(_n) or f"{_n} statements")
              for name in router.VENDOR_METHODS["get_balance_sheet"]}
+
+    def not_an_a_share(ticker, *a, **k):
+        raise NoMarketDataError(ticker, ticker, "akshare serves A-shares only")
+
+    chain["akshare"] = not_an_a_share
     with mock.patch.dict(router.VENDOR_METHODS, {"get_balance_sheet": chain}):
         router.route_to_vendor("get_balance_sheet", "AAPL", "quarterly", PAST)
     assert served == ["sec_edgar"]

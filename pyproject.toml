@@ -7,6 +7,11 @@ name = "tradingagents"
 dynamic = ["version"]
 description = "TradingAgents: Multi-Agents LLM Financial Trading Framework"
 readme = "README.md"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "liangkang"},
+]
+urls = {Repository = "https://github.com/liangkang/tradingagents-akshare"}
 requires-python = ">=3.11"
 dependencies = [
     "cryptography>=42.0",
@@ -14,6 +19,7 @@ dependencies = [
     "langchain-anthropic>=1.7.4",
     "langchain-google-genai>=4.4.0",
     "langchain-openai>=1.6.6",
+    "httpx[socks]>=0.27.0",
     "langgraph>=1.2.12",
     "langgraph-checkpoint-sqlite>=3.1.1",
     "markdown-it-py>=4.0",
@@ -25,9 +31,12 @@ dependencies = [
     "requests>=2.32.4",
     "rich>=14.0.0",
     "typer>=0.21.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
     "stockstats>=0.6.5",
     "typing-extensions>=4.14.0",
     "yfinance>=1.7.0",
+    "akshare>=1.18.0",
 ]
 
 [project.optional-dependencies]
@@ -49,11 +58,12 @@ tradingagents = "cli.main:app"
 version = {attr = "tradingagents.__version__"}
 
 [tool.setuptools.packages.find]
-include = ["tradingagents*", "cli*"]
+include = ["tradingagents*", "cli*", "web*"]
 
 [tool.setuptools.package-data]
 cli = ["static/*"]
 tradingagents = ["assets/*.svg"]
+web = ["templates/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

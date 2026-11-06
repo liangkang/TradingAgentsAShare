@@ -48,6 +48,21 @@ def opponent_argument_or_opening(text: str, opponent: str) -> str:
     return f"(The {opponent} has not spoken yet — open the debate with your own case.)"
 
 
+def is_cn_ticker(ticker: str) -> bool:
+    """Return True for tickers that are China A-share listed.
+
+    Recognizes both domestic conventions (.SH, .SZ) and the Yahoo Finance
+    convention (.SS). This is the single source of truth for analysts and
+    other consumers that need to branch behavior for China A-shares.
+    """
+    ticker_upper = ticker.upper()
+    return (
+        ticker_upper.endswith(".SH")
+        or ticker_upper.endswith(".SZ")
+        or ticker_upper.endswith(".SS")
+    )
+
+
 def _clean_identity_value(value: Any) -> str | None:
     """Return a trimmed string, or None for empty / placeholder-ish values."""
     if not isinstance(value, str):
@@ -67,8 +82,8 @@ def resolve_instrument_identity(ticker: str) -> dict:
     the price action to a narrative and invent an identity that then cascaded
     through every downstream agent.
 
-    Best-effort by design: if yfinance is unavailable, rate-limited, or doesn't
-    recognise the ticker, we return ``{}`` and the caller falls back to
+    Best-effort by design: if no vendor is available, rate-limited, or
+    recognises the ticker, we return ``{}`` and the caller falls back to
     ticker-only context rather than failing before analysis starts. An answer
     is cached for the process; a failed lookup is asked again next time.
 
@@ -84,7 +99,36 @@ def resolve_instrument_identity(ticker: str) -> dict:
 
 @functools.lru_cache(maxsize=256)
 def _identity(ticker: str) -> dict:
-    """The vendor's identity fields for ``ticker``; raises if the lookup fails."""
+    """Identity fields for ``ticker``; raises if no vendor names it and one failed.
+
+    AkShare is asked first for A-share and Hong Kong symbols, which it covers
+    better and without blocking on Yahoo; Yahoo first for everything else. A
+    vendor's answer counts once it names the company: AkShare can return only
+    the exchange it infers from the suffix, and then the next vendor is asked.
+    """
+    akshare_first = ticker.upper().endswith((".SS", ".SZ", ".HK"))
+    resolvers = (
+        (_akshare_identity, _yahoo_identity)
+        if akshare_first
+        else (_yahoo_identity, _akshare_identity)
+    )
+    identity: dict[str, str] = {}
+    error: Exception | None = None
+    for resolver in resolvers:
+        try:
+            identity = {**resolver(ticker), **identity}
+        except Exception as exc:  # noqa: BLE001 — the next vendor may answer
+            error = exc
+            continue
+        if identity.get("company_name"):
+            return identity
+    if error is not None:
+        raise error  # not cached: a failed lookup is asked again next time
+    return identity
+
+
+def _yahoo_identity(ticker: str) -> dict[str, str]:
+    """Yahoo's identity fields for ``ticker``; raises if the lookup fails."""
     info = get_company_profile(ticker)
     identity: dict[str, str] = {}
     company_name = _clean_identity_value(info.get("longName")) or _clean_identity_value(
@@ -101,6 +145,62 @@ def _identity(ticker: str) -> dict:
         value = _clean_identity_value(info.get(source_key))
         if value:
             identity[target_key] = value
+    return identity
+
+
+def _akshare_identity(ticker: str) -> dict[str, str]:
+    """AkShare's identity fields for an A-share or Hong Kong ticker; ``{}`` for any other.
+
+    Each lookup is best-effort: a failed one leaves its fields out, so the
+    caller sees no company name and asks the next vendor.
+    """
+    upper = ticker.upper()
+    identity: dict[str, str] = {}
+    try:
+        import akshare as ak
+
+        if upper.endswith((".SS", ".SZ")):
+            bare_code = upper[:-3]
+            is_shanghai = upper.endswith(".SS")
+            identity["exchange"] = (
+                "Shanghai Stock Exchange"
+                if is_shanghai
+                else "Shenzhen Stock Exchange"
+            )
+            identity["quote_type"] = "EQUITY"
+            try:
+                name_df = ak.stock_info_a_code_name()
+                row = name_df[name_df["code"] == bare_code]
+                if not row.empty:
+                    cn_name = _clean_identity_value(row.iloc[0].get("name"))
+                    if cn_name:
+                        identity["company_name"] = cn_name
+            except Exception:
+                pass
+            try:
+                prefix = "SH" if is_shanghai else "SZ"
+                df = ak.stock_profile_cninfo(symbol=prefix + bare_code)
+                if df is not None and not df.empty:
+                    industry = _clean_identity_value(df.iloc[0].get("所属行业"))
+                    if industry:
+                        identity["industry"] = industry
+            except Exception:
+                pass
+        elif upper.endswith(".HK"):
+            code = upper[:-3].lstrip("0").zfill(5)
+            df = ak.stock_hk_company_profile_em(symbol=code)
+            if df is not None and not df.empty:
+                row = df.iloc[0]
+                cn_name = _clean_identity_value(row.get("公司名称"))
+                if cn_name:
+                    identity["company_name"] = cn_name
+                industry = _clean_identity_value(row.get("所属行业"))
+                if industry:
+                    identity["industry"] = industry
+                identity["exchange"] = "Hong Kong Stock Exchange"
+                identity["quote_type"] = "EQUITY"
+    except Exception as exc:
+        logger.debug("akshare identity lookup failed for %s: %s", ticker, exc)
     return identity
 
 

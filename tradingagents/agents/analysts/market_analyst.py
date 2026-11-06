@@ -1,7 +1,12 @@
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from tradingagents.agents.analysts.turn import take_turn
-from tradingagents.agents.context import get_instrument_context_from_state, get_language_instruction
+from tradingagents.agents.context import (
+    get_instrument_context_from_state,
+    get_language_instruction,
+    is_cn_ticker,
+)
+from tradingagents.agents.extended_tools import get_fund_flow, offered_tools
 from tradingagents.agents.tools import get_indicators, get_stock_data, get_verified_market_snapshot
 
 # The tools this analyst is offered; its tool node is built from the same tuple.
@@ -9,6 +14,7 @@ TOOLS = (
     get_stock_data,
     get_indicators,
     get_verified_market_snapshot,
+    get_fund_flow,  # A-shares only: see offered_tools
 )
 
 
@@ -17,6 +23,13 @@ def create_market_analyst(llm):
     def market_analyst_node(state):
         current_date = state["trade_date"]
         instrument_context = get_instrument_context_from_state(state)
+        tools = offered_tools(TOOLS, state["company_of_interest"])
+        a_share_note = (
+            " This is a China A-share: also call get_fund_flow(curr_date) for its recent"
+            " capital inflow, outflow and net flow (资金流向), a read on institutional and"
+            " retail positioning to weigh alongside the price action."
+            if is_cn_ticker(state["company_of_interest"]) else ""
+        )
 
         system_message = (
             """You are a trading assistant tasked with analyzing financial markets. Your role is to select the **most relevant indicators** for a given market condition or trading strategy from the following list. The goal is to choose up to **8 indicators** that provide complementary insights without redundancy. Categories and each category's indicators are:
@@ -49,6 +62,7 @@ Before writing the final report, call get_verified_market_snapshot for this tick
 
 Write a very detailed and nuanced report of the trends you observe. Provide specific, actionable insights with supporting evidence to help traders make informed decisions."""
             + """ Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."""
+            + a_share_note
             + get_language_instruction()
         )
 
@@ -70,11 +84,11 @@ Write a very detailed and nuanced report of the trends you observe. Provide spec
         )
 
         prompt = prompt.partial(system_message=system_message)
-        prompt = prompt.partial(tool_names=", ".join([tool.name for tool in TOOLS]))
+        prompt = prompt.partial(tool_names=", ".join([tool.name for tool in tools]))
         prompt = prompt.partial(current_date=current_date)
         prompt = prompt.partial(instrument_context=instrument_context)
 
-        result, report = take_turn(prompt, llm, TOOLS, state["messages"])
+        result, report = take_turn(prompt, llm, tools, state["messages"])
 
         return {
             "messages": [result],

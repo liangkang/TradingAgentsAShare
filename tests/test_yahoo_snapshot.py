@@ -6,7 +6,14 @@ import pandas as pd
 import pytest
 
 import tradingagents.dataflows.vendors.yahoo.snapshot as validator
-from tradingagents.dataflows.errors import NoMarketDataError
+from tradingagents.dataflows.config import set_config
+from tradingagents.dataflows.errors import NoMarketDataError, VendorUnavailableError
+
+
+@pytest.fixture(autouse=True)
+def _yahoo_prices():
+    """These tests cover the Yahoo snapshot path; the default chain puts akshare first."""
+    set_config({"data_vendors": {"core_stock_apis": "yfinance"}})
 
 
 def _sample_ohlcv() -> pd.DataFrame:
@@ -73,6 +80,45 @@ class TestTool:
             {"symbol": "COF", "curr_date": "2026-05-20"}
         )
         assert "Verified market data snapshot for COF" in out
+
+
+@pytest.mark.unit
+class TestSnapshotFollowsThePriceChain:
+    """The snapshot reads prices from the same vendor chain get_stock_data uses."""
+
+    def _yahoo_must_not_be_called(self, *args, **kwargs):
+        raise AssertionError("Yahoo was asked although akshare served the rows")
+
+    def test_akshare_first_serves_the_rows(self, monkeypatch):
+        set_config({"data_vendors": {"core_stock_apis": "akshare,yfinance"}})
+        monkeypatch.setattr(validator, "_load_ohlcv_akshare", lambda s, d: _sample_ohlcv())
+        monkeypatch.setattr(validator, "load_ohlcv", self._yahoo_must_not_be_called)
+
+        snap = validator.build_verified_market_snapshot("600519.SS", "2026-05-13")
+        assert "Latest trading row used: 2026-05-13" in snap
+
+    def test_no_data_from_akshare_hands_over_to_yahoo(self, monkeypatch):
+        set_config({"data_vendors": {"core_stock_apis": "akshare,yfinance"}})
+
+        def no_rows(symbol, as_of_date):
+            raise NoMarketDataError(symbol, symbol, "not covered")
+
+        monkeypatch.setattr(validator, "_load_ohlcv_akshare", no_rows)
+        monkeypatch.setattr(validator, "load_ohlcv", lambda s, d, fill_gaps=True: _sample_ohlcv())
+
+        snap = validator.build_verified_market_snapshot("COF", "2026-05-13")
+        assert "Verified market data snapshot for COF" in snap
+
+    def test_an_unreachable_chain_is_reported_as_unavailable(self, monkeypatch):
+        set_config({"data_vendors": {"core_stock_apis": "akshare"}})
+
+        def unreachable(symbol, as_of_date):
+            raise ConnectionError("connection refused")
+
+        monkeypatch.setattr(validator, "_load_ohlcv_akshare", unreachable)
+
+        with pytest.raises(VendorUnavailableError):
+            validator.build_verified_market_snapshot("600519.SS", "2026-05-13")
 
 
 @pytest.mark.unit

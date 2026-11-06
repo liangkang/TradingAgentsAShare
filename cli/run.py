@@ -9,6 +9,7 @@ from pathlib import Path
 
 import typer
 from rich.live import Live
+from rich.markup import escape
 
 from cli.display import (
     ANALYST_ORDER,
@@ -69,8 +70,10 @@ def _build_run_config(selections: dict, checkpoint: bool | None) -> dict:
     rounds = (("TRADINGAGENTS_MAX_DEBATE_ROUNDS", "max_debate_rounds"),
               ("TRADINGAGENTS_MAX_RISK_ROUNDS", "max_risk_discuss_rounds"))
     depth_was_asked = not depth_from_env()
+    # A depth given as a flag (`analyze --research-depth`) is explicit, so it wins.
+    depth_is_explicit = bool(selections.get("research_depth_explicit"))
     for env_var, key in rounds:
-        if not os.environ.get(env_var):
+        if depth_is_explicit or not os.environ.get(env_var):
             config[key] = selections["research_depth"]
         elif depth_was_asked:
             # The depth question appeared (it is skipped only when both are
@@ -96,11 +99,18 @@ def _build_run_config(selections: dict, checkpoint: bool | None) -> dict:
     return config
 
 
-def run_analysis(checkpoint: bool | None = None, portfolio=None, flags=None):
+def run_analysis(checkpoint: bool | None = None, portfolio=None, flags=None, vnpy=None):
+    """Run one analysis from the terminal.
+
+    ``flags`` answer the setup and report questions (see ``get_user_selections``);
+    ``flags["no_interactive"]`` refuses to ask any, even at a terminal. ``vnpy``,
+    when given, holds the ``signal_dir``, ``exchange`` and ``ttl_hours`` of the
+    vn.py signal written from the finished run.
+    """
     flags = flags or {}
     # With no terminal nothing can answer a prompt: name every question still
     # open before any model is called, rather than stopping at the first one.
-    if not (sys.stdin and sys.stdin.isatty()):
+    if flags.get("no_interactive") or not (sys.stdin and sys.stdin.isatty()):
         gaps = unattended_gaps(flags)
         if gaps:
             console.print("[red]No terminal to answer the setup questions. Set:[/red]")
@@ -385,8 +395,25 @@ def run_analysis(checkpoint: bool | None = None, portfolio=None, flags=None):
         )
     console.print(f"[dim]{analyst_wall_time_tracker.format_summary()}[/dim]")
 
+    if vnpy is not None:
+        from tradingagents.integrations.vnpy import export_vnpy_signal
+
+        # A signal that cannot be made must not cost the run its report.
+        try:
+            signal_path = export_vnpy_signal(
+                final_state,
+                selections["ticker"],
+                vnpy["signal_dir"],
+                exchange=vnpy.get("exchange"),
+                ttl_hours=vnpy.get("ttl_hours", 24),
+            )
+            console.print(f"[green]Exported vn.py signal:[/green] {signal_path}")
+        except ValueError as exc:
+            console.print(f"[red]vn.py signal not exported: {escape(str(exc))}[/red]")
+
     _offer_reports(final_state, graph, selections["ticker"],
-                   save=flags.get("save"), show=flags.get("show"), html=flags.get("html"))
+                   save=flags.get("save"), show=flags.get("show"), html=flags.get("html"),
+                   save_path=flags.get("save_path"))
 
 
 def _yes(question: str) -> bool:
@@ -423,7 +450,7 @@ def _open_page(page: Path) -> None:
         console.print(f"  [dim]Could not open a browser; the page is at:[/dim] {page}")
 
 
-def _offer_reports(final_state, graph, ticker, save=None, show=None, html=None):
+def _offer_reports(final_state, graph, ticker, save=None, show=None, html=None, save_path=None):
     """Save the report tree and show it; ``save``/``show``/``html`` answer the questions when given.
 
     A saved report includes the HTML page unless ``html`` is False. Someone
@@ -437,7 +464,10 @@ def _offer_reports(final_state, graph, ticker, save=None, show=None, html=None):
         # Under results_dir, not the working directory: in Docker the working
         # directory is inside the container and the report goes with it, while
         # results_dir is the mounted volume the rest of the run already writes to.
-        save_path = graph.default_report_path(ticker)
+        # A caller may name the folder, or a rule for it from the resolved ticker.
+        if callable(save_path):
+            save_path = save_path(ticker)
+        save_path = Path(save_path) if save_path else graph.default_report_path(ticker)
         if asked:   # someone at the prompt may pick another folder
             save_path = Path(typer.prompt(
                 "Save path (press Enter for default)", default=str(save_path)

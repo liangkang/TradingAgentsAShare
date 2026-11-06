@@ -9,6 +9,7 @@ from typing import Annotated, Literal
 from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
+from tradingagents.agents.context import is_cn_ticker
 from tradingagents.dataflows.date_window import as_of, as_of_window
 from tradingagents.dataflows.errors import NoMarketDataError, VendorUnavailableError
 from tradingagents.dataflows.router import no_data_available, route_to_vendor, vendor_unavailable
@@ -197,6 +198,7 @@ def get_global_news(
     look_back_days: Annotated[int | None, "Days to look back; omit to use the configured default"] = None,
     limit: Annotated[int | None, "Max articles to return; omit to use the configured default"] = None,
     trade_date: Annotated[str, InjectedState("trade_date")] = "",
+    ticker: Annotated[str, InjectedState("company_of_interest")] = "",
 ) -> str:
     """
     Retrieve global news data.
@@ -212,7 +214,13 @@ def get_global_news(
     Returns:
         str: A formatted string containing global news data
     """
-    return route_to_vendor("get_global_news", as_of(curr_date, trade_date), look_back_days, limit)
+    # AkShare's global feed is China-market news: an instrument listed elsewhere
+    # reads the macro picture from the next configured vendor instead.
+    excluded = {"akshare"} if ticker and not is_cn_ticker(ticker) else set()
+    return route_to_vendor(
+        "get_global_news", as_of(curr_date, trade_date), look_back_days, limit,
+        _exclude_vendors=excluded,
+    )
 
 
 @tool

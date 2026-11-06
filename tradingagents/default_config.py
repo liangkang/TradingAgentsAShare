@@ -144,11 +144,11 @@ def build_default_config() -> dict:
         # Search queries used by get_global_news for macro headlines. Extend or
         # replace to broaden geographic / sector coverage.
         "global_news_queries": [
-            "Federal Reserve interest rates inflation",
-            "S&P 500 earnings GDP economic outlook",
-            "geopolitical risk trade war sanctions",
-            "ECB Bank of England BOJ central bank policy",
-            "oil commodities supply chain energy",
+            "China central bank monetary policy PBOC RRR interest rate",
+            "China GDP economic growth trade export PMI",
+            "geopolitical risk trade war sanctions supply chain",
+            "oil commodities energy prices inflation",
+            "A-share market regulation policy reform",
         ],
         # Data vendor configuration
         # Category-level configuration (default for all tools in category).
@@ -156,12 +156,15 @@ def build_default_config() -> dict:
         # routed to vendors you didn't choose. For ordered fallback, list several,
         # e.g. "yfinance,alpha_vantage". "default" uses all available vendors.
         "data_vendors": {
-            "core_stock_apis": "yfinance",       # Options: alpha_vantage, yfinance
-            "technical_indicators": "yfinance",  # Options: alpha_vantage, yfinance
-            # Statements come from SEC EDGAR as filed (US filers), then Yahoo; the
-        # overview and insider tools, which SEC EDGAR does not serve, from Yahoo.
-        "fundamental_data": "sec_edgar,yfinance",  # Options: sec_edgar, alpha_vantage, yfinance
-            "news_data": "yfinance",             # Options: alpha_vantage, yfinance
+            # akshare serves A-shares (.SS/.SZ/.SH) and raises NoMarketDataError for
+            # everything else, so US/HK tickers fall through to the next vendor.
+            "core_stock_apis": "akshare,yfinance",       # Options: akshare, alpha_vantage, yfinance
+            "technical_indicators": "akshare,yfinance",  # Options: akshare, alpha_vantage, yfinance
+            # A-share statements from akshare; US filers' statements from SEC EDGAR as
+            # filed, then Yahoo. The overview and insider tools, which SEC EDGAR does
+            # not serve, skip it and go to Yahoo.
+            "fundamental_data": "akshare,sec_edgar,yfinance",  # Options: akshare, sec_edgar, alpha_vantage, yfinance
+            "news_data": "akshare,yfinance",             # Options: akshare, alpha_vantage, yfinance
             "macro_data": "fred",                # Options: fred (needs FRED_API_KEY)
             "prediction_markets": "polymarket",  # Options: polymarket (keyless)
         },

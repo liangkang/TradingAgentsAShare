@@ -60,13 +60,16 @@ def unattended_gaps(flags) -> list[str]:
     env = os.environ.get
     gaps = [f"--{name}" for name in ("ticker", "date", "analysts") if flags.get(name) is None]
     gaps += [f"--{name} or --no-{name}" for name in ("save", "show") if flags.get(name) is None]
-    if not env("TRADINGAGENTS_OUTPUT_LANGUAGE"):
+    # The `analyze` command's flags (provider, models, depth, language) answer
+    # these as the environment does; the bare command has only the environment.
+    if not (flags.get("output_language") or env("TRADINGAGENTS_OUTPUT_LANGUAGE")):
         gaps.append("TRADINGAGENTS_OUTPUT_LANGUAGE")
-    if not depth_from_env():
+    if flags.get("research_depth") is None and not depth_from_env():
         gaps.append("TRADINGAGENTS_MAX_DEBATE_ROUNDS and TRADINGAGENTS_MAX_RISK_ROUNDS")
-    if not env("TRADINGAGENTS_LLM_PROVIDER"):
+    if not (flags.get("provider") or env("TRADINGAGENTS_LLM_PROVIDER")):
         gaps.append("TRADINGAGENTS_LLM_PROVIDER")
-    if not (env("TRADINGAGENTS_QUICK_THINK_LLM") or env("TRADINGAGENTS_DEEP_THINK_LLM")):
+    if not (flags.get("quick_model") or flags.get("deep_model")
+            or env("TRADINGAGENTS_QUICK_THINK_LLM") or env("TRADINGAGENTS_DEEP_THINK_LLM")):
         gaps.append("TRADINGAGENTS_QUICK_THINK_LLM or TRADINGAGENTS_DEEP_THINK_LLM")
     return gaps
 
@@ -199,8 +202,11 @@ def _prompt_selections(prefs, flags):
         )
         analysis_date = get_analysis_date()
 
-    # Step 3: Output language (skipped when set via TRADINGAGENTS_OUTPUT_LANGUAGE)
-    if os.environ.get("TRADINGAGENTS_OUTPUT_LANGUAGE"):
+    # Step 3: Output language (skipped when given as a flag or via TRADINGAGENTS_OUTPUT_LANGUAGE)
+    if flags.get("output_language"):
+        output_language = flags["output_language"]
+        console.print(f"[green]✓ Output language:[/green] {output_language}")
+    elif os.environ.get("TRADINGAGENTS_OUTPUT_LANGUAGE"):
         output_language = DEFAULT_CONFIG["output_language"]
         console.print(
             f"[green]✓ Output language from environment:[/green] {output_language}"
@@ -233,7 +239,10 @@ def _prompt_selections(prefs, flags):
     # Research depth maps to the debate + risk round counts; when both are
     # supplied through TRADINGAGENTS_MAX_DEBATE_ROUNDS / _MAX_RISK_ROUNDS we keep
     # the run non-interactive and honor the env values (#977).
-    if depth_from_env():
+    if flags.get("research_depth") is not None:
+        selected_research_depth = flags["research_depth"]
+        console.print(f"[green]✓ Research depth:[/green] {selected_research_depth}")
+    elif depth_from_env():
         selected_research_depth = DEFAULT_CONFIG["max_debate_rounds"]
         console.print(
             f"[green]✓ Research depth from environment:[/green] "
@@ -252,8 +261,16 @@ def _prompt_selections(prefs, flags):
     # The backend URL comes from TRADINGAGENTS_LLM_BACKEND_URL when set,
     # otherwise the provider's default endpoint — the same value the menu
     # would have picked.
+    provider_from_flag = bool(flags.get("provider"))
     provider_from_env = bool(os.environ.get("TRADINGAGENTS_LLM_PROVIDER"))
-    if provider_from_env:
+    if provider_from_flag:
+        selected_llm_provider = flags["provider"].lower()
+        backend_url = resolve_backend_url(
+            selected_llm_provider, env_url=DEFAULT_CONFIG["backend_url"]
+        )
+        console.print(f"[green]✓ LLM provider:[/green] {selected_llm_provider}")
+        console.print(f"[green]✓ Backend URL:[/green] {backend_url}")
+    elif provider_from_env:
         selected_llm_provider = DEFAULT_CONFIG["llm_provider"].lower()
         backend_url = resolve_backend_url(
             selected_llm_provider, env_url=DEFAULT_CONFIG["backend_url"]
@@ -299,8 +316,16 @@ def _prompt_selections(prefs, flags):
 
     _check_tier_providers(selected_llm_provider, backend_url)
 
-    # Step 7: Thinking agents (skipped when either model is set via environment)
-    if os.environ.get("TRADINGAGENTS_QUICK_THINK_LLM") or os.environ.get("TRADINGAGENTS_DEEP_THINK_LLM"):
+    # Step 7: Thinking agents (skipped when either model is given as a flag or
+    # set via environment; the other then keeps its configured value)
+    if flags.get("quick_model") or flags.get("deep_model"):
+        selected_shallow_thinker = flags.get("quick_model") or DEFAULT_CONFIG["quick_think_llm"]
+        selected_deep_thinker = flags.get("deep_model") or DEFAULT_CONFIG["deep_think_llm"]
+        console.print(
+            f"[green]✓ Thinking agents:[/green] "
+            f"quick={selected_shallow_thinker}, deep={selected_deep_thinker}"
+        )
+    elif os.environ.get("TRADINGAGENTS_QUICK_THINK_LLM") or os.environ.get("TRADINGAGENTS_DEEP_THINK_LLM"):
         selected_shallow_thinker = DEFAULT_CONFIG["quick_think_llm"]
         selected_deep_thinker = DEFAULT_CONFIG["deep_think_llm"]
         console.print(
@@ -331,7 +356,7 @@ def _prompt_selections(prefs, flags):
     anthropic_effort = None
 
     provider_lower = selected_llm_provider.lower()
-    if provider_from_env:
+    if provider_from_env or provider_from_flag:
         thinking_level = DEFAULT_CONFIG["google_thinking_level"]
         reasoning_effort = DEFAULT_CONFIG["openai_reasoning_effort"]
         anthropic_effort = DEFAULT_CONFIG["anthropic_effort"]
@@ -360,6 +385,8 @@ def _prompt_selections(prefs, flags):
         "analysis_date": analysis_date,
         "analysts": selected_analysts,
         "research_depth": selected_research_depth,
+        # A depth given as a flag wins over env round counts; a prompted one does not.
+        "research_depth_explicit": flags.get("research_depth") is not None,
         "llm_provider": selected_llm_provider.lower(),
         "backend_url": backend_url,
         "quick_think_llm": selected_shallow_thinker,

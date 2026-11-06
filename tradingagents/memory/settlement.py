@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 
 from tradingagents.dataflows.symbols import normalize_symbol
+from tradingagents.dataflows.vendors.akshare import _load_ohlcv_akshare
 from tradingagents.dataflows.vendors.yahoo.market import get_closes
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,43 @@ def _by_day(closes):
     return closes if tz is None else closes.tz_localize(None)
 
 
+def _closes(symbol: str, start_date: str, end_date: str) -> pd.Series:
+    """Daily closes from ``start_date`` up to, not including, ``end_date``: Yahoo, else AkShare.
+
+    Yahoo is often unreachable from mainland China, where an A-share run's
+    decisions still need settling. AkShare is asked only when Yahoo fails or
+    serves nothing; when it cannot serve the window either, Yahoo's own failure
+    is raised for the caller to report.
+    """
+    yahoo_error: Exception | None = None
+    closes = pd.Series(dtype=float)
+    try:
+        closes = get_closes(symbol, start_date, end_date)
+        if not closes.empty:
+            return closes
+    except Exception as exc:  # noqa: BLE001 — AkShare may still serve the window
+        yahoo_error = exc
+
+    try:
+        data = _load_ohlcv_akshare(symbol, end_date)
+    except Exception as exc:  # noqa: BLE001 — fall back to Yahoo's verdict
+        logger.debug("AkShare closes unavailable for %s: %s", symbol, exc)
+        data = None
+    if data is not None and not data.empty:
+        dates = pd.to_datetime(data["Date"], errors="coerce")
+        in_window = (dates >= pd.Timestamp(start_date)) & (dates < pd.Timestamp(end_date))
+        if in_window.any():
+            return pd.Series(
+                data.loc[in_window, "Close"].astype(float).to_numpy(),
+                index=pd.DatetimeIndex(dates[in_window]),
+                name="Close",
+            )
+
+    if yahoo_error is not None:
+        raise yahoo_error
+    return closes
+
+
 def fetch_returns(
     ticker: str, trade_date: str, holding_days: int = 5,
     benchmark: str = "SPY",
@@ -90,8 +128,8 @@ def fetch_returns(
     def closes(until):
         # Closes for the instrument the analysis priced (XAUUSD -> GC=F, #984),
         # from the first session after the decision date.
-        stock = _by_day(get_closes(ticker, trade_date, until.strftime("%Y-%m-%d")))
-        return stock[stock.index > start], _by_day(get_closes(benchmark, bench_start, until.strftime("%Y-%m-%d")))
+        stock = _by_day(_closes(ticker, trade_date, until.strftime("%Y-%m-%d")))
+        return stock[stock.index > start], _by_day(_closes(benchmark, bench_start, until.strftime("%Y-%m-%d")))
 
     def traded(stock, bench):
         return len(stock) > holding_days and not bench.empty and bench.index[-1] >= stock.index[holding_days]

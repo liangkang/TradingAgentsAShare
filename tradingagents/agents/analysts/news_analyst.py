@@ -1,7 +1,12 @@
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from tradingagents.agents.analysts.turn import take_turn
-from tradingagents.agents.context import get_instrument_context_from_state, get_language_instruction
+from tradingagents.agents.context import (
+    get_instrument_context_from_state,
+    get_language_instruction,
+    is_cn_ticker,
+)
+from tradingagents.agents.extended_tools import get_lhb_detail, offered_tools
 from tradingagents.agents.tools import (
     get_global_news,
     get_macro_indicators,
@@ -15,18 +20,41 @@ TOOLS = (
     get_global_news,
     get_macro_indicators,
     get_prediction_markets,
+    get_lhb_detail,  # A-shares only: see offered_tools
 )
 
 
 def create_news_analyst(llm):
     def news_analyst_node(state):
+        ticker = state["company_of_interest"]
         current_date = state["trade_date"]
         asset_type = state.get("asset_type", "stock")
         asset_label = "company" if asset_type == "stock" else "asset"
         instrument_context = get_instrument_context_from_state(state)
 
+        # FRED macro indicators are US-centric: an A-share run is not offered them.
+        is_cn = is_cn_ticker(ticker)
+        tools = tuple(t for t in offered_tools(TOOLS, ticker) if not (is_cn and t is get_macro_indicators))
+
+        tool_descriptions = [
+            f"get_news(start_date, end_date) for news about the {asset_label} under analysis",
+            "get_global_news(curr_date, look_back_days, limit) for broader macroeconomic news",
+        ]
+        if is_cn:
+            tool_descriptions.append(
+                "get_lhb_detail(curr_date) for the stock's dragon-tiger board (龙虎榜) listings: the brokerage seats buying and selling it on its large-move days"
+            )
+        else:
+            tool_descriptions.append(
+                "get_macro_indicators(indicator, curr_date, look_back_days) to ground macro commentary in actual data from FRED (e.g. 'cpi', 'core_pce', 'unemployment', 'fed_funds_rate', '10y_treasury', 'yield_curve')"
+            )
+        tool_descriptions.append(
+            "get_prediction_markets(topic, limit) for live market-implied probabilities of forward-looking events (e.g. 'Fed rate cut', 'recession 2026', geopolitical or sector events)"
+        )
+        tools_text = ", ".join(tool_descriptions[:-1]) + ", and " + tool_descriptions[-1]
+
         system_message = (
-            f"You are a news researcher tasked with analyzing recent news and trends over the past week. Please write a comprehensive report of the current state of the world that is relevant for trading and macroeconomics. Use the available tools: get_news(start_date, end_date) for news about the {asset_label} under analysis, get_global_news(curr_date, look_back_days, limit) for broader macroeconomic news, get_macro_indicators(indicator, curr_date, look_back_days) to ground macro commentary in actual data from FRED (e.g. 'cpi', 'core_pce', 'unemployment', 'fed_funds_rate', '10y_treasury', 'yield_curve'), and get_prediction_markets(topic, limit) for live market-implied probabilities of forward-looking events (e.g. 'Fed rate cut', 'recession 2026', geopolitical or sector events). Provide specific, actionable insights with supporting evidence to help traders make informed decisions."
+            f"You are a news researcher tasked with analyzing recent news and trends over the past week. Please write a comprehensive report of the current state of the world that is relevant for trading and macroeconomics. Use the available tools: {tools_text}. Provide specific, actionable insights with supporting evidence to help traders make informed decisions."
             + """ Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."""
             + get_language_instruction()
         )
@@ -49,11 +77,11 @@ def create_news_analyst(llm):
         )
 
         prompt = prompt.partial(system_message=system_message)
-        prompt = prompt.partial(tool_names=", ".join([tool.name for tool in TOOLS]))
+        prompt = prompt.partial(tool_names=", ".join([tool.name for tool in tools]))
         prompt = prompt.partial(current_date=current_date)
         prompt = prompt.partial(instrument_context=instrument_context)
 
-        result, report = take_turn(prompt, llm, TOOLS, state["messages"])
+        result, report = take_turn(prompt, llm, tools, state["messages"])
 
         return {
             "messages": [result],

@@ -7,6 +7,11 @@ prompt, so the model reports on data it was given rather than inventing posts:
   2. StockTwits messages: the cashtag stream, with Bullish/Bearish tags
   3. Reddit posts: r/wallstreetbets, r/stocks, r/investing, or crypto communities for a crypto pair
 
+A China A-share ticker swaps the US-centric StockTwits and Reddit for China
+social and attention signals (East Money popularity, Xueqiu discussion rank,
+Baidu bullish/bearish votes, Weibo attention), with its news from AKShare-backed
+East Money/CNInfo through the configured news vendor.
+
 Each source is trimmed to the analysis window. With a TypeSafe key, the social
 posts are screened by Jev first (see post_screen). These feeds serve recent items
 and are not archived, so a historical run's sentiment inputs are not
@@ -22,7 +27,11 @@ from datetime import datetime, timedelta
 from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
-from tradingagents.agents.context import get_instrument_context_from_state, get_language_instruction
+from tradingagents.agents.context import (
+    get_instrument_context_from_state,
+    get_language_instruction,
+    is_cn_ticker,
+)
 from tradingagents.agents.post_screen import jev_screen
 from tradingagents.agents.schemas import SentimentReport, render_sentiment_report
 from tradingagents.agents.structured import (
@@ -31,6 +40,7 @@ from tradingagents.agents.structured import (
     invoke_structured_or_freetext,
 )
 from tradingagents.agents.tools import get_news
+from tradingagents.dataflows.vendors.china_social import fetch_china_social_sentiment
 from tradingagents.dataflows.vendors.reddit import (
     CRYPTO_SUBREDDITS,
     DEFAULT_SUBREDDITS,
@@ -42,6 +52,11 @@ from tradingagents.dataflows.vendors.stocktwits import fetch_stocktwits_messages
 
 def _seven_days_back(trade_date: str) -> str:
     return (datetime.strptime(trade_date, "%Y-%m-%d") - timedelta(days=7)).strftime("%Y-%m-%d")
+
+
+def _news_source_label(ticker: str) -> str:
+    """Return the human-readable news source for the ticker market."""
+    return "akshare (East Money) + CNInfo" if is_cn_ticker(ticker) else "Yahoo Finance"
 
 
 def create_sentiment_analyst(llm):
@@ -64,16 +79,26 @@ def create_sentiment_analyst(llm):
         # returns a string (no exceptions surface from here), so the LLM
         # always sees something — either real data or a clear placeholder.
         news_block = get_news.func(ticker, start_date, end_date)
-        # Pass the analysis window so a historical run trims social posts to it
-        # instead of leaking today's chatter into a backtest (#1220).
-        screen = jev_screen(ticker)
-        stocktwits_block = fetch_stocktwits_messages(
-            ticker, limit=30, start_date=start_date, end_date=end_date, screen=screen
-        )
-        subreddits = subreddits_for(ticker)
-        reddit_block = fetch_reddit_posts(
-            ticker, subreddits, start_date=start_date, end_date=end_date, screen=screen
-        )
+
+        # StockTwits and Reddit are US-centric: for a China A-share they carry
+        # negligible signal and the requests often time out from behind certain
+        # firewalls, so that market reads China social/attention signals instead.
+        china_social_block = None
+        stocktwits_block = reddit_block = ""
+        subreddits = DEFAULT_SUBREDDITS
+        if is_cn_ticker(ticker):
+            china_social_block = fetch_china_social_sentiment(ticker, end_date)
+        else:
+            # Pass the analysis window so a historical run trims social posts to it
+            # instead of leaking today's chatter into a backtest (#1220).
+            screen = jev_screen(ticker)
+            stocktwits_block = fetch_stocktwits_messages(
+                ticker, limit=30, start_date=start_date, end_date=end_date, screen=screen
+            )
+            subreddits = subreddits_for(ticker)
+            reddit_block = fetch_reddit_posts(
+                ticker, subreddits, start_date=start_date, end_date=end_date, screen=screen
+            )
 
         system_message = _build_system_message(
             ticker=ticker,
@@ -83,6 +108,7 @@ def create_sentiment_analyst(llm):
             stocktwits_block=stocktwits_block,
             reddit_block=reddit_block,
             subreddits=subreddits,
+            china_social_block=china_social_block,
         )
 
         prompt = ChatPromptTemplate.from_messages(
@@ -136,26 +162,97 @@ def _build_system_message(
     stocktwits_block: str,
     reddit_block: str,
     subreddits: tuple[str, ...] = DEFAULT_SUBREDDITS,
+    china_social_block: str | None = None,
 ) -> str:
     """Assemble the sentiment-analyst system message with structured data blocks."""
-    if subreddits == DEFAULT_SUBREDDITS:
-        character = "r/wallstreetbets is often contrarian/exuberant; r/stocks more measured; r/investing longer-term"
-    elif len(subreddits) > len(CRYPTO_SUBREDDITS):
-        character = f"r/{subreddits[0]} leans toward the coin's holders; r/CryptoCurrency and r/CryptoMarkets are broader"
+    if is_cn_ticker(ticker):
+        data_sources_intro = (
+            "China-market news and social/attention signals. StockTwits and "
+            "Reddit are US-centric and are skipped for this China A-share ticker"
+        )
+        social_sections = f"""### China A-share social and attention signals
+Current-snapshot signals from East Money popularity, Xueqiu discussion,
+Baidu Finance bullish/bearish votes, and Weibo attention. Individual sources
+may be unavailable, especially for a historical analysis date.
+
+<start_of_china_social>
+{china_social_block or "<unavailable — China social data was not collected>"}
+<end_of_china_social>"""
+        analysis_guidance = """1. **Separate attention from direction.** East Money,
+Xueqiu, and Weibo rankings show participation or popularity; a high rank is
+not evidence of bullishness. Treat Baidu's bullish/bearish vote as the explicit
+directional social signal.
+
+2. **Look for cross-source divergences.** Compare directional votes with
+company-news framing and with attention. High attention plus negative news is
+different from high attention plus positive news.
+
+3. **Do not invent posts or opinions.** These ranking interfaces do not provide
+a representative corpus of user messages. Describe only the supplied ranks,
+votes, keywords, and news evidence.
+
+4. **Respect point-in-time limits.** If the China social block says current
+snapshots were unavailable for a historical date, do not use present-day
+rankings as historical evidence and lower confidence accordingly.
+
+5. **Distinguish opinion from event.** Votes and popularity are audience
+signals; company announcements and news are events and should normally carry
+more evidentiary weight.
+
+6. **Be honest about data limits.** Flag every unavailable source and reduce
+confidence when directional vote data or timely news is missing.
+
+7. **Identify recurring narrative themes, catalysts, and risks** across news,
+hot keywords, votes, and attention without treating sentiment as a price call.
+
+8. **Past sentiment is not predictive.** Frame conclusions as one signal for
+the trader to weigh alongside fundamentals and technicals."""
     else:
-        character = "r/CryptoCurrency and r/CryptoMarkets are broad crypto communities"
-    return f"""You are a financial market sentiment analyst. Your task is to produce a comprehensive sentiment report for {ticker} covering the period from {start_date} to {end_date}, drawing on three complementary data sources that have already been collected for you.
+        data_sources_intro = "three complementary data sources"
+        social_sections, analysis_guidance = _us_social_sections(
+            stocktwits_block, reddit_block, subreddits
+        )
+
+    return f"""You are a financial market sentiment analyst. Your task is to produce a comprehensive sentiment report for {ticker} covering the period from {start_date} to {end_date}, drawing on {data_sources_intro} that have already been collected for you.
 
 ## Data sources (pre-fetched, in this prompt)
 
-### News headlines — Yahoo Finance, past 7 days
+### News headlines — {_news_source_label(ticker)}, past 7 days
 Institutional framing. Fact-driven, slower-moving signal.
 
 <start_of_news>
 {news_block}
 <end_of_news>
 
-### StockTwits messages — retail-trader social platform indexed by cashtag
+{social_sections}
+
+## How to analyze this data (best practices)
+
+{analysis_guidance}
+
+## Output fields
+
+Fill the following fields:
+
+- **overall_band**: Exactly one of Bullish / Mildly Bullish / Neutral / Mixed / Mildly Bearish / Bearish. Use Mixed when sources point in clearly different directions; Neutral only when all sources are genuinely silent.
+- **overall_score**: A number from 0 (maximally bearish) to 10 (maximally bullish); 5 is neutral. Keep it consistent with overall_band.
+- **confidence**: low / medium / high, based on data quality and sample size.
+- **narrative**: Full source-by-source breakdown, divergences, dominant narrative themes, catalysts and risks, and a markdown summary table of key sentiment signals (direction, source, supporting evidence).
+
+{get_language_instruction()}"""
+
+
+def _us_social_sections(
+    stocktwits_block: str, reddit_block: str, subreddits: tuple[str, ...]
+) -> tuple[str, str]:
+    """The StockTwits/Reddit data sections and their analysis guidance."""
+    if subreddits == DEFAULT_SUBREDDITS:
+        character = "r/wallstreetbets is often contrarian/exuberant; r/stocks more measured; r/investing longer-term"
+    elif len(subreddits) > len(CRYPTO_SUBREDDITS):
+        character = f"r/{subreddits[0]} leans toward the coin's holders; r/CryptoCurrency and r/CryptoMarkets are broader"
+    else:
+        character = "r/CryptoCurrency and r/CryptoMarkets are broad crypto communities"
+    social_sections = f"""### StockTwits messages — retail-trader social platform indexed by cashtag
 Fast-moving signal. Each message carries a user-labeled sentiment tag (Bullish / Bearish / no-label) plus the message body.
 
 <start_of_stocktwits>
@@ -167,11 +264,8 @@ Community discussion, without vote or comment counts. Subreddit character matter
 
 <start_of_reddit>
 {reddit_block}
-<end_of_reddit>
-
-## How to analyze this data (best practices)
-
-1. **Read the StockTwits Bullish/Bearish ratio as a leading retail-sentiment signal.** A 70/30 bullish/bearish split is moderately bullish; ≥90/10 may indicate over-extension and contrarian risk; 50/50 is uncertainty. Sample size matters — base rates on the actual message count, not percentages alone. A block headed "Screened by Jev" has had off-topic posts removed; its stance count is a classifier's read of every on-topic post fetched, labelled or not, of which the posts listed are a sample. Read it alongside the user tags.
+<end_of_reddit>"""
+    analysis_guidance = """1. **Read the StockTwits Bullish/Bearish ratio as a leading retail-sentiment signal.** A 70/30 bullish/bearish split is moderately bullish; ≥90/10 may indicate over-extension and contrarian risk; 50/50 is uncertainty. Sample size matters — base rates on the actual message count, not percentages alone. A block headed "Screened by Jev" has had off-topic posts removed; its stance count is a classifier's read of every on-topic post fetched, labelled or not, of which the posts listed are a sample. Read it alongside the user tags.
 
 2. **Look for cross-source divergences.** If news framing is bearish but StockTwits is overwhelmingly bullish, that mismatch is itself a signal — it can mean retail is leaning into a thesis the news flow hasn't caught up to (or vice versa, that retail is chasing while institutions are cautious).
 
@@ -185,15 +279,5 @@ Community discussion, without vote or comment counts. Subreddit character matter
 
 7. **Identify catalysts and risks** that emerge across sources — news of upcoming earnings, product launches, competitive threats, macro headlines, etc.
 
-8. **Past sentiment is not predictive.** Frame your conclusions as signal for the trader to weigh alongside fundamentals and technicals, not as a price call.
-
-## Output fields
-
-Fill the following fields:
-
-- **overall_band**: Exactly one of Bullish / Mildly Bullish / Neutral / Mixed / Mildly Bearish / Bearish. Use Mixed when sources point in clearly different directions; Neutral only when all sources are genuinely silent.
-- **overall_score**: A number from 0 (maximally bearish) to 10 (maximally bullish); 5 is neutral. Keep it consistent with overall_band.
-- **confidence**: low / medium / high, based on data quality and sample size.
-- **narrative**: Full source-by-source breakdown, divergences, dominant narrative themes, catalysts and risks, and a markdown summary table of key sentiment signals (direction, source, supporting evidence).
-
-{get_language_instruction()}"""
+8. **Past sentiment is not predictive.** Frame your conclusions as signal for the trader to weigh alongside fundamentals and technicals, not as a price call."""
+    return social_sections, analysis_guidance

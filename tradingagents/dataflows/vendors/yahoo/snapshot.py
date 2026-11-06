@@ -10,15 +10,20 @@ claim. Deterministic, no LLM involved.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 
 import pandas as pd
 from stockstats import wrap
 
-from tradingagents.dataflows.errors import NoMarketDataError
+from tradingagents.dataflows.errors import NoMarketDataError, VendorUnavailableError
+from tradingagents.dataflows.router import get_vendor
 from tradingagents.dataflows.symbols import normalize_symbol
+from tradingagents.dataflows.vendors.akshare import _load_ohlcv_akshare
 from tradingagents.dataflows.vendors.yahoo.common import price_text
 from tradingagents.dataflows.vendors.yahoo.ohlcv import load_ohlcv
+
+logger = logging.getLogger(__name__)
 
 # A fixed, common indicator set so the snapshot is the same shape every run.
 DEFAULT_SNAPSHOT_INDICATORS: tuple[str, ...] = (
@@ -26,6 +31,36 @@ DEFAULT_SNAPSHOT_INDICATORS: tuple[str, ...] = (
     "rsi", "boll", "boll_ub", "boll_lb",
     "macd", "macds", "macdh", "atr",
 )
+
+
+def _load_rows(symbol: str, as_of_date: str) -> pd.DataFrame:
+    """OHLCV, as the vendor reported it, from the chain that serves get_stock_data.
+
+    The snapshot is the analyst's ground truth for the prices get_stock_data
+    shows it, so it reads from the same configured ``core_stock_apis`` chain
+    (e.g. ``akshare,yfinance``) rather than always from Yahoo: two sources can
+    disagree on price adjustment and session coverage. A vendor with no data for
+    the symbol, or one that cannot be reached, hands over to the next. A chain
+    naming no vendor the snapshot can read falls back to Yahoo.
+    """
+    loaders = {
+        "akshare": lambda: _load_ohlcv_akshare(symbol, as_of_date),
+        "yfinance": lambda: load_ohlcv(symbol, as_of_date, fill_gaps=False),
+    }
+    configured = [v.strip() for v in get_vendor("core_stock_apis", "get_stock_data").split(",")]
+    chain = [v for v in configured if v in loaders] or ["yfinance"]
+
+    error: Exception | None = None
+    for vendor in chain:
+        try:
+            return loaders[vendor]()
+        except (NoMarketDataError, VendorUnavailableError, OSError) as exc:
+            logger.warning("Snapshot vendor %r could not serve %s: %s", vendor, symbol, exc)
+            error = exc
+    if isinstance(error, OSError):
+        # A tool that raises ends the run; an unreachable vendor must not.
+        raise VendorUnavailableError(f"no snapshot vendor reachable for {symbol}: {error}") from error
+    raise error
 
 
 def _verified_rows(symbol: str, as_of_date: str) -> pd.DataFrame:
@@ -37,7 +72,7 @@ def _verified_rows(symbol: str, as_of_date: str) -> pd.DataFrame:
     """
     # As reported: this snapshot is quoted by the agents as exact prices, so a
     # gap-filled cell would put the previous session's number under this date.
-    data = load_ohlcv(symbol, as_of_date, fill_gaps=False)
+    data = _load_rows(symbol, as_of_date)
     if data is None or data.empty:
         raise NoMarketDataError(symbol, normalize_symbol(symbol), "no price rows")
 

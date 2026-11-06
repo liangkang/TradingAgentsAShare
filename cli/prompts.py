@@ -11,12 +11,17 @@ from rich.markup import escape
 
 from cli.display import console
 from cli.models import AnalystType, AssetType
-from tradingagents.dataflows.symbols import safe_ticker_component
+from tradingagents.dataflows.symbols import (
+    AShareNameResolutionError,
+    contains_chinese,
+    safe_ticker_component,
+)
 from tradingagents.llm_clients.api_key_env import get_api_key_env
 from tradingagents.llm_clients.model_catalog import get_model_options
 from tradingagents.llm_clients.openai_client import OPENAI_COMPATIBLE_PROVIDERS, SIGNED_IN_PROVIDERS
+from tradingagents.llm_clients.provider_catalog import get_provider_options
 
-TICKER_INPUT_EXAMPLES = "SPY, 0700.HK, BTC-USD"
+TICKER_INPUT_EXAMPLES = "SPY, 0700.HK, BTC-USD, 长飞光纤"
 
 ANALYST_CHOICES = [
     ("Market Analyst", AnalystType.MARKET),
@@ -45,6 +50,13 @@ def is_valid_ticker_input(value: str) -> bool:
     """
     if not value.strip():
         return True
+    if contains_chinese(value):
+        # An A-share short name (e.g. 长飞光纤, *ST康美) may hold ASCII letters,
+        # an asterisk or typography-only whitespace. Resolving it needs AKShare's
+        # stock list, so here only its shape is checked; parse_ticker and
+        # get_ticker resolve it to a code, which the data layer then checks.
+        v = value.strip()
+        return len(v) <= 32 and all(ch.isalnum() or ch.isspace() or ch == "*" for ch in v)
     try:
         safe_ticker_component(normalize_ticker_symbol(value))
     except ValueError:
@@ -77,7 +89,13 @@ def get_ticker() -> str:
         console.print("\n[red]No ticker symbol provided. Exiting...[/red]")
         exit(1)
 
-    return normalize_ticker_symbol(ticker) if ticker.strip() else "SPY"
+    if not ticker.strip():
+        return "SPY"
+    try:
+        return normalize_ticker_symbol(ticker)
+    except ValueError as exc:
+        console.print(f"\n[red]Invalid ticker: {exc}[/red]")
+        raise SystemExit(2) from None
 
 
 def parse_ticker(value: str) -> str:
@@ -125,9 +143,13 @@ def normalize_ticker_symbol(ticker: str) -> str:
     plain upper-case if the data layer is unavailable.
     """
     try:
-        from tradingagents.dataflows.symbols import normalize_symbol
+        from tradingagents.dataflows.symbols import normalize_symbol, resolve_a_share_name
 
+        if contains_chinese(ticker):
+            ticker = resolve_a_share_name(ticker)
         return normalize_symbol(ticker)
+    except AShareNameResolutionError:
+        raise
     except Exception:
         return ticker.strip().upper()
 
@@ -383,28 +405,9 @@ def _llm_provider_table() -> list[tuple[str, str, str | None]]:
     (convention from the broader Ollama ecosystem); falls back to the
     localhost default when unset.
     """
-    ollama_url = os.environ.get("OLLAMA_BASE_URL") or "http://localhost:11434/v1"
     return [
-        ("OpenAI", "openai", "https://api.openai.com/v1"),
-        ("Google", "google", None),
-        ("Anthropic", "anthropic", "https://api.anthropic.com/"),
-        ("ChatGPT (Plus or Pro plan)", "chatgpt", "https://api.openai.com/v1"),
-        ("xAI", "xai", "https://api.x.ai/v1"),
-        ("DeepSeek", "deepseek", "https://api.deepseek.com"),
-        ("Qwen", "qwen", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"),
-        # Z.AI international, the platform ZHIPU_API_KEY belongs to; the CN
-        # platform is the separate glm-cn key, chosen in the region prompt.
-        ("GLM", "glm", "https://api.z.ai/api/paas/v4/"),
-        ("MiniMax", "minimax", "https://api.minimax.io/v1"),
-        ("OpenRouter", "openrouter", "https://openrouter.ai/api/v1"),
-        ("Mistral", "mistral", "https://api.mistral.ai/v1"),
-        ("Kimi (Moonshot)", "kimi", "https://api.moonshot.ai/v1"),
-        ("Groq", "groq", "https://api.groq.com/openai/v1"),
-        ("NVIDIA NIM", "nvidia", "https://integrate.api.nvidia.com/v1"),
-        ("Azure OpenAI", "azure", None),
-        ("Amazon Bedrock", "bedrock", None),
-        ("Ollama", "ollama", ollama_url),
-        ("OpenAI-compatible (vLLM, LM Studio, llama.cpp, custom relay)", "openai_compatible", None),
+        (option.display, option.key, option.default_url)
+        for option in get_provider_options()
     ]
 
 
