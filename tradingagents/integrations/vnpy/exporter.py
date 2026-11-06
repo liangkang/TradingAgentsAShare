@@ -6,7 +6,7 @@ import json
 import os
 import re
 import tempfile
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -98,9 +98,9 @@ def build_vnpy_signal(
         )
     rating = PortfolioRating(rating_text)
     symbol, resolved_exchange = resolve_vnpy_instrument(ticker, exchange)
-    timestamp = generated_at or datetime.now(timezone.utc)
+    timestamp = generated_at or datetime.now(UTC)
     if timestamp.tzinfo is None:
-        timestamp = timestamp.replace(tzinfo=timezone.utc)
+        timestamp = timestamp.replace(tzinfo=UTC)
 
     price_target_text = _extract_markdown_field(decision, "Price Target")
     try:

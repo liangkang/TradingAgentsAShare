@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 import pandas as pd
 from dateutil.relativedelta import relativedelta
@@ -55,7 +55,7 @@ def _to_ak_date(yyyy_mm_dd: str) -> str:
     return yyyy_mm_dd.replace("-", "")
 
 
-def _fetch_cn_daily(ak_sym: str) -> "pd.DataFrame":
+def _fetch_cn_daily(ak_sym: str) -> pd.DataFrame:
     """Fetch A-share daily OHLCV — Sina first, Tencent fallback.
 
     Sina (``stock_zh_a_daily``) has full columns (open/high/low/close/volume).
@@ -522,7 +522,7 @@ def get_stock_stats_indicators_akshare(
             # Not one day could be read (akshare unreachable, say): hand the
             # failure to the router, which tries the next configured vendor,
             # rather than a table of errors that reads as an answer.
-            raise last_error
+            raise last_error from exc
 
     return (
         f"## {indicator} values from {before.strftime('%Y-%m-%d')} to {end_date}:\n\n"
@@ -656,7 +656,7 @@ def _pivot_financial_long_to_wide(
 
 
 def _filter_financials_by_date(
-    data: pd.DataFrame, curr_date: Optional[str]
+    data: pd.DataFrame, curr_date: str | None
 ) -> pd.DataFrame:
     """Drop financial statement columns (fiscal-period timestamps) after curr_date."""
     if not curr_date or data.empty:
@@ -697,10 +697,7 @@ def get_balance_sheet_akshare(
                 )
             # A-share BS comes wide-format with 'REPORT_DATE' column
             # Transpose: items as rows, dates as columns
-            if "REPORT_DATE" in df.columns:
-                data = df.set_index("REPORT_DATE").T
-            else:
-                data = df
+            data = df.set_index("REPORT_DATE").T if "REPORT_DATE" in df.columns else df
             data = _filter_financials_by_date(data, curr_date)
 
         else:
@@ -760,10 +757,7 @@ def get_cashflow_akshare(
                 raise NoMarketDataError(
                     ticker, ak_sym, "no CN cash flow from akshare"
                 )
-            if "REPORT_DATE" in df.columns:
-                data = df.set_index("REPORT_DATE").T
-            else:
-                data = df
+            data = df.set_index("REPORT_DATE").T if "REPORT_DATE" in df.columns else df
             data = _filter_financials_by_date(data, curr_date)
 
         else:
@@ -823,10 +817,7 @@ def get_income_statement_akshare(
                 raise NoMarketDataError(
                     ticker, ak_sym, "no CN income statement from akshare"
                 )
-            if "REPORT_DATE" in df.columns:
-                data = df.set_index("REPORT_DATE").T
-            else:
-                data = df
+            data = df.set_index("REPORT_DATE").T if "REPORT_DATE" in df.columns else df
             data = _filter_financials_by_date(data, curr_date)
 
         else:
@@ -1223,7 +1214,7 @@ def get_fund_flow_akshare(ticker: str, curr_date: str = None) -> str:
     r = row.iloc[0]
     lines = [
         f"# 资金流向 for {display}",
-        f"# Source: akshare (同花顺数据中心)",
+        "# Source: akshare (同花顺数据中心)",
         f"# Retrieved: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         "",
     ]
@@ -1257,8 +1248,9 @@ def get_lhb_detail_akshare(ticker: str, curr_date: str = None) -> str:
             "akshare LHB detail only available for A-share stocks",
         )
 
-    import akshare as ak
     from datetime import timedelta
+
+    import akshare as ak
     bare_code = ak_sym.replace("SH", "").replace("SZ", "")
 
     end_dt = datetime.now()
@@ -1288,7 +1280,7 @@ def get_lhb_detail_akshare(ticker: str, curr_date: str = None) -> str:
 
     lines = [
         f"# 龙虎榜详情 for {display}",
-        f"# Source: akshare (东方财富数据中心)",
+        "# Source: akshare (东方财富数据中心)",
         f"# Retrieved: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         "",
     ]
@@ -1311,7 +1303,7 @@ def get_lhb_detail_akshare(ticker: str, curr_date: str = None) -> str:
             lines.append(f"  上榜后表现: {' | '.join(post)}")
 
     if len(rows) == 0:
-        lines.append(f"(无近期龙虎榜记录)")
+        lines.append("(无近期龙虎榜记录)")
     return "\n".join(lines)
 
 
@@ -1337,11 +1329,9 @@ def get_institute_hold_akshare(ticker: str, curr_date: str = None) -> str:
     # and work backwards until we find data.
     current_year = datetime.now().year
     current_month = datetime.now().month
-    # Determine which quarter's data is most likely available
-    if current_month >= 5:
-        latest = f"{current_year}1"  # Q1 report available after April
-    else:
-        latest = f"{current_year-1}4"
+    # Determine which quarter's data is most likely available: Q1 reports
+    # are out after April, otherwise fall back to last year's Q4.
+    latest = f"{current_year}1" if current_month >= 5 else f"{current_year - 1}4"
     year = int(latest[:4])
     qtr = int(latest[4])
     quarters = []
@@ -1377,7 +1367,7 @@ def get_institute_hold_akshare(ticker: str, curr_date: str = None) -> str:
 
     lines = [
         f"# 机构持仓 for {display}",
-        f"# Source: akshare (新浪财经)",
+        "# Source: akshare (新浪财经)",
         f"# Retrieved: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         "",
     ]

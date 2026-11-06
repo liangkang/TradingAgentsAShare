@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -31,7 +31,7 @@ def _final_state(rating: str = "Buy") -> dict:
 
 @pytest.mark.unit
 def test_build_vnpy_signal_maps_a_share_rating_and_fields():
-    generated_at = datetime(2026, 8, 6, 9, 0, tzinfo=timezone.utc)
+    generated_at = datetime(2026, 8, 6, 9, 0, tzinfo=UTC)
 
     signal = build_vnpy_signal(
         _final_state(), "600519.SS", ttl_hours=12, generated_at=generated_at
